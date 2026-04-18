@@ -5,6 +5,8 @@ using System.IO;
 using System;
 using KSP.Localization;
 using System.Globalization;
+using ClickThroughFix; // ClickThroughBlocker support
+using ToolbarControl_NS; // ToolbarController support
 
 namespace AdvancedVesselInfo
 {
@@ -13,7 +15,7 @@ namespace AdvancedVesselInfo
     public class AdvancedVesselInfoManager : MonoBehaviour
     {
         public static AdvancedVesselInfoManager Instance;
-        public string currentMissionPurpose = "Testing and Validation";
+        public string currentMissionPurpose = "Enter Mission";
 
         private string storagePath;
         private string settingsPath;
@@ -32,6 +34,10 @@ namespace AdvancedVesselInfo
         public int payFontSize = 11;
         public bool payFontBold = false;
 
+        public float savedDescHeight = 80f;
+        public float savedLogHeight = 120f;
+        public float savedPayHeight = 100f;
+
         // Initializes the plugin, sets up file paths, and ensures only one instance exists.
         void Awake()
         {
@@ -44,6 +50,9 @@ namespace AdvancedVesselInfo
 
                 LoadSettings();
                 GameEvents.onLevelWasLoaded.Add(OnLevelLoaded);
+
+                // Register the mod globally ONLY ONCE when the manager is created to prevent duplicates on scene changes.
+                ToolbarControl.RegisterMod(AdvancedVesselInfoUI.MODID, AdvancedVesselInfoUI.MODNAME);
             }
             else { Destroy(gameObject); }
         }
@@ -75,6 +84,10 @@ namespace AdvancedVesselInfo
                     if (node.HasValue("logFontBold") && bool.TryParse(node.GetValue("logFontBold"), out b)) logFontBold = b;
                     if (node.HasValue("payFontSize") && int.TryParse(node.GetValue("payFontSize"), out i)) payFontSize = i;
                     if (node.HasValue("payFontBold") && bool.TryParse(node.GetValue("payFontBold"), out b)) payFontBold = b;
+
+                    if (node.HasValue("descHeight") && float.TryParse(node.GetValue("descHeight"), NumberStyles.Any, CultureInfo.InvariantCulture, out f)) savedDescHeight = f;
+                    if (node.HasValue("logHeight") && float.TryParse(node.GetValue("logHeight"), NumberStyles.Any, CultureInfo.InvariantCulture, out f)) savedLogHeight = f;
+                    if (node.HasValue("payHeight") && float.TryParse(node.GetValue("payHeight"), NumberStyles.Any, CultureInfo.InvariantCulture, out f)) savedPayHeight = f;
 
                     ConfigNode famNode = node.GetNode("FAMILIES");
                     if (famNode != null)
@@ -118,11 +131,62 @@ namespace AdvancedVesselInfo
             node.AddValue("payFontSize", payFontSize.ToString());
             node.AddValue("payFontBold", payFontBold.ToString());
 
+            node.AddValue("descHeight", savedDescHeight.ToString(CultureInfo.InvariantCulture));
+            node.AddValue("logHeight", savedLogHeight.ToString(CultureInfo.InvariantCulture));
+            node.AddValue("payHeight", savedPayHeight.ToString(CultureInfo.InvariantCulture));
+
             ConfigNode famNode = node.AddNode("FAMILIES");
             foreach (string f in customFamilies)
                 famNode.AddValue("name", f);
 
             node.Save(settingsPath);
+        }
+
+        // Deletes a custom family and resets all assigned crafts to Uncategorized.
+        public void DeleteFamily(string familyName)
+        {
+            if (customFamilies.Contains(familyName))
+            {
+                customFamilies.Remove(familyName);
+                SaveSettings(savedWindowRect, savedSettingsRect, savedLibraryWidth, savedShowLibrary, savedShowHelp);
+            }
+
+            if (File.Exists(storagePath))
+            {
+                ConfigNode root = ConfigNode.Load(storagePath);
+                if (root != null)
+                {
+                    bool changed = false;
+                    foreach (ConfigNode node in root.GetNodes())
+                    {
+                        if (node.HasValue("familyTag") && node.GetValue("familyTag") == familyName)
+                        {
+                            node.SetValue("familyTag", "Uncategorized", true);
+                            changed = true;
+                        }
+                    }
+                    if (changed) root.Save(storagePath);
+                }
+            }
+        }
+
+        // Resets the family tag of a specific craft back to Uncategorized.
+        public void RemoveCraftFromFamily(string shipName)
+        {
+            if (File.Exists(storagePath))
+            {
+                ConfigNode root = ConfigNode.Load(storagePath);
+                if (root != null)
+                {
+                    string nodeName = shipName.Replace(" ", "_");
+                    ConfigNode vesselNode = root.GetNode(nodeName);
+                    if (vesselNode != null)
+                    {
+                        vesselNode.SetValue("familyTag", "Uncategorized", true);
+                        root.Save(storagePath);
+                    }
+                }
+            }
         }
 
         // Event handler that detects when a flight begins to automatically record the launch.
@@ -133,15 +197,33 @@ namespace AdvancedVesselInfo
                 if (FlightGlobals.ActiveVessel.situation == Vessel.Situations.PRELAUNCH)
                     LogLaunch(FlightGlobals.ActiveVessel.vesselName);
             }
+            else if (scene == GameScenes.EDITOR)
+            {
+                currentMissionPurpose = "Enter Mission";
+            }
         }
 
-        // Creates a new timestamped flight log entry for the current vessel.
+        // Creates a new timestamped flight log entry for the current vessel or its linked alias.
         private void LogLaunch(string shipName)
         {
             string date = KSPUtil.PrintDate((int)Planetarium.GetUniversalTime(), true, true);
             ConfigNode root = ConfigNode.Load(storagePath) ?? new ConfigNode();
             string nodeName = shipName.Replace(" ", "_");
-            ConfigNode vesselNode = root.GetNode(nodeName) ?? root.AddNode(nodeName);
+
+            // Check for linked craft
+            ConfigNode sourceNode = root.GetNode(nodeName);
+            string targetNodeName = nodeName;
+
+            if (sourceNode != null && sourceNode.HasValue("linkedLogCraft"))
+            {
+                string link = sourceNode.GetValue("linkedLogCraft");
+                if (!string.IsNullOrEmpty(link) && link != "None")
+                {
+                    targetNodeName = link.Replace(" ", "_");
+                }
+            }
+
+            ConfigNode vesselNode = root.GetNode(targetNodeName) ?? root.AddNode(targetNodeName);
             ConfigNode historyNode = vesselNode.GetNode("HISTORY") ?? vesselNode.AddNode("HISTORY");
             ConfigNode launchEntry = historyNode.AddNode("LAUNCH");
             launchEntry.AddValue("date", date);
@@ -151,7 +233,7 @@ namespace AdvancedVesselInfo
         }
 
         // Saves all custom vessel data including escaped descriptions, payload info, and flight logs.
-        public void SaveCraftData(string shipName, string description, string purpose, string family, int parts, float mass, float cost, List<AdvancedVesselInfoUI.PayloadEntry> payloads, List<AdvancedVesselInfoUI.LaunchEntry> history = null)
+        public void SaveCraftData(string shipName, string description, string purpose, string family, string linkedCraft, int parts, float mass, float cost, List<AdvancedVesselInfoUI.PayloadEntry> payloads, List<AdvancedVesselInfoUI.LaunchEntry> history = null)
         {
             ConfigNode root = ConfigNode.Load(storagePath) ?? new ConfigNode();
             string nodeName = shipName.Replace(" ", "_");
@@ -163,6 +245,7 @@ namespace AdvancedVesselInfo
 
             vesselNode.SetValue("missionPurpose", purpose, true);
             vesselNode.SetValue("familyTag", family, true);
+            vesselNode.SetValue("linkedLogCraft", linkedCraft, true);
             vesselNode.SetValue("partCount", parts.ToString(), true);
             vesselNode.SetValue("mass", mass.ToString("F2", CultureInfo.InvariantCulture), true);
             vesselNode.SetValue("cost", cost.ToString("F2", CultureInfo.InvariantCulture), true);
@@ -215,7 +298,13 @@ namespace AdvancedVesselInfo
         public class PayloadEntry { public string destination = "Target"; public string amount = "0.0"; }
         public class LaunchEntry { public string date = ""; public string purpose = ""; public int status = 0; }
 
-        private static ApplicationLauncherButton toolbarButton = null;
+        // Constants used by ToolbarController to identify the mod globally.
+        internal const string MODID = "AdvancedVesselInfo";
+        internal const string MODNAME = "Advanced Vessel Info";
+
+        // ToolbarController replaces the standard ApplicationLauncherButton.
+        private static ToolbarControl toolbarControl = null;
+
         private bool showGui = false;
         private bool showCraftList = false;
         private bool showHelp = false;
@@ -225,7 +314,10 @@ namespace AdvancedVesselInfo
         private bool payloadEditMode = false;
         private bool descriptionEditMode = false;
         private bool familyEditMode = false;
+        private bool missionEditMode = false;
         private bool showFamilyDropdown = false;
+        private bool linkEditMode = false;
+        private bool showLinkDropdown = false;
         private bool sortByFamily = false;
 
         private Rect windowRect;
@@ -242,6 +334,15 @@ namespace AdvancedVesselInfo
         private float libraryResizeStartX = 0f;
         private float libraryResizeStartWidth = 0f;
 
+        private float descHeight;
+        private float logHeight;
+        private float payHeight;
+        private bool isResizingDesc = false;
+        private bool isResizingLog = false;
+        private bool isResizingPay = false;
+        private float dragStartY;
+        private float dragStartHeight;
+
         private string searchTerm = "";
         private string newFamilyInput = "";
         private Dictionary<string, List<string>> craftByFolder = new Dictionary<string, List<string>>();
@@ -252,6 +353,7 @@ namespace AdvancedVesselInfo
         private string currentCraftName = "";
         private string customDescription = "";
         private string currentFamilyTag = "";
+        private string currentLinkedCraft = "None";
         private int currentPartCount = 0;
         private float currentMass = 0f;
         private float currentCost = 0f;
@@ -265,6 +367,7 @@ namespace AdvancedVesselInfo
         private Vector2 helpScrollPos;
         private Vector2 descriptionScrollPos;
         private Vector2 familyScrollPos;
+        private Vector2 linkScrollPos;
 
         private GUIStyle folderHeaderStyle;
         private GUIStyle craftButtonStyle;
@@ -279,8 +382,13 @@ namespace AdvancedVesselInfo
             showCraftList = AdvancedVesselInfoManager.Instance.savedShowLibrary;
             showHelp = AdvancedVesselInfoManager.Instance.savedShowHelp;
 
-            if (ApplicationLauncher.Ready && toolbarButton == null) AddToolbarButton();
-            else if (toolbarButton == null) GameEvents.onGUIApplicationLauncherReady.Add(AddToolbarButton);
+            descHeight = AdvancedVesselInfoManager.Instance.savedDescHeight;
+            logHeight = AdvancedVesselInfoManager.Instance.savedLogHeight;
+            payHeight = AdvancedVesselInfoManager.Instance.savedPayHeight;
+
+            // Initialize the ToolbarController directly instead of waiting for ApplicationLauncher.
+            if (toolbarControl == null) AddToolbarButton();
+
             if (HighLogic.LoadedSceneIsEditor) GameEvents.onEditorShipModified.Add((ship) => SyncWithCurrentEditor());
         }
 
@@ -317,6 +425,36 @@ namespace AdvancedVesselInfo
             return result;
         }
 
+        // Helper method to draw a draggable handle for resizing UI sections
+        private float DrawResizeHandle(float currentHeight, ref bool isResizingFlag)
+        {
+            GUILayout.Box("≡", new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fixedHeight = 10, padding = new RectOffset(0, 0, 0, 0) }, GUILayout.ExpandWidth(true));
+            Rect handleRect = GUILayoutUtility.GetLastRect();
+
+            Event e = Event.current;
+            if (e.type == EventType.MouseDown && e.button == 0 && handleRect.Contains(e.mousePosition))
+            {
+                isResizingFlag = true;
+                dragStartY = e.mousePosition.y;
+                dragStartHeight = currentHeight;
+                e.Use();
+            }
+
+            if (isResizingFlag)
+            {
+                if (e.type == EventType.MouseDrag)
+                {
+                    float newHeight = dragStartHeight + (e.mousePosition.y - dragStartY);
+                    currentHeight = Mathf.Clamp(newHeight, 30f, 600f);
+                }
+                else if (e.type == EventType.MouseUp)
+                {
+                    isResizingFlag = false;
+                }
+            }
+            return currentHeight;
+        }
+
         // Synchronizes the plugin with the current ship being edited in the VAB or SPH.
         private void SyncWithCurrentEditor()
         {
@@ -345,22 +483,30 @@ namespace AdvancedVesselInfo
             }
         }
 
-        // Adds the mod's icon to the KSP stock toolbar for toggling the interface.
+        // Adds the mod's icon to both Blizzy's toolbar and the stock toolbar via ToolbarController.
         void AddToolbarButton()
         {
-            if (ApplicationLauncher.Instance != null && toolbarButton == null)
+            if (toolbarControl == null)
             {
-                toolbarButton = ApplicationLauncher.Instance.AddModApplication(
+                toolbarControl = gameObject.AddComponent<ToolbarControl>();
+                toolbarControl.AddToAllToolbars(
                     () => {
                         showGui = true;
                         LoadAvailableCrafts();
                         if (HighLogic.LoadedSceneIsEditor) SyncWithCurrentEditor();
                         else if (FlightGlobals.ActiveVessel != null) LoadCraftData(FlightGlobals.ActiveVessel.vesselName);
                     },
-                    () => { showGui = false; editMode = false; payloadEditMode = false; descriptionEditMode = false; familyEditMode = false; showFamilyDropdown = false; showSettings = false; },
-                    null, null, null, null,
+                    () => {
+                        showGui = false; editMode = false; payloadEditMode = false; descriptionEditMode = false;
+                        familyEditMode = false; showFamilyDropdown = false; linkEditMode = false; showLinkDropdown = false;
+                        missionEditMode = false; showSettings = false;
+                    },
                     ApplicationLauncher.AppScenes.VAB | ApplicationLauncher.AppScenes.SPH | ApplicationLauncher.AppScenes.FLIGHT,
-                    GameDatabase.Instance.GetTexture("AdvancedVesselInfo/Icons/Toolbar", false)
+                    MODID,
+                    "advancedVesselInfoButton",
+                    "AdvancedVesselInfo/Icons/Toolbar",
+                    "AdvancedVesselInfo/Icons/Toolbar",
+                    MODNAME
                 );
             }
         }
@@ -484,7 +630,9 @@ namespace AdvancedVesselInfo
             if (!showGui) return;
 
             Vector2 oldMainPos = new Vector2(windowRect.x, windowRect.y);
-            windowRect = GUILayout.Window(8842, windowRect, DrawWindowContent, "Advanced Vessel Info");
+
+            // Replaced GUILayout.Window with ClickThruBlocker.GUILayoutWindow
+            windowRect = ClickThruBlocker.GUILayoutWindow(8842, windowRect, DrawWindowContent, "Advanced Vessel Info");
 
             if (windowRect.x != oldMainPos.x || windowRect.y != oldMainPos.y)
             {
@@ -498,14 +646,18 @@ namespace AdvancedVesselInfo
                 listRect.y = windowRect.y;
                 listRect.width = libraryWidth;
                 listRect.height = windowRect.height;
-                listRect = GUILayout.Window(8845, listRect, DrawCraftList, "Craft Library");
+                // Replaced GUILayout.Window with ClickThruBlocker.GUILayoutWindow
+                listRect = ClickThruBlocker.GUILayoutWindow(8845, listRect, DrawCraftList, "Craft Library");
             }
             if (showHelp)
             {
                 helpRect.x = windowRect.x + windowRect.width; helpRect.y = windowRect.y; helpRect.height = windowRect.height;
-                helpRect = GUILayout.Window(8843, helpRect, DrawHelpContent, "System Help");
+                // Replaced GUILayout.Window with ClickThruBlocker.GUILayoutWindow
+                helpRect = ClickThruBlocker.GUILayoutWindow(8843, helpRect, DrawHelpContent, "System Help");
             }
-            if (showSettings) settingsRect = GUILayout.Window(8846, settingsRect, DrawSettingsWindow, "UI Preferences");
+
+            // Replaced GUILayout.Window with ClickThruBlocker.GUILayoutWindow
+            if (showSettings) settingsRect = ClickThruBlocker.GUILayoutWindow(8846, settingsRect, DrawSettingsWindow, "UI Settings");
 
             HandleResize();
         }
@@ -561,40 +713,96 @@ namespace AdvancedVesselInfo
             GUILayout.EndHorizontal();
 
             GUILayout.BeginVertical("box");
-            descriptionScrollPos = GUILayout.BeginScrollView(descriptionScrollPos, GUILayout.Height(windowRect.height * 0.12f));
+            descriptionScrollPos = GUILayout.BeginScrollView(descriptionScrollPos, GUILayout.Height(descHeight));
             GUIStyle descStyle = new GUIStyle(GUI.skin.label) { fontSize = mgr.descFontSize, fontStyle = mgr.descFontBold ? FontStyle.Bold : FontStyle.Normal, wordWrap = true };
             if (descriptionEditMode) customDescription = GUILayout.TextArea(customDescription, GUILayout.ExpandHeight(true));
             else GUILayout.Label(customDescription, descStyle);
             GUILayout.EndScrollView();
             GUILayout.EndVertical();
+            descHeight = DrawResizeHandle(descHeight, ref isResizingDesc);
 
             GUILayout.Space(5);
+            GUILayout.BeginHorizontal();
             GUILayout.Label("Mission Purpose:", BoldStyle(12));
-            mgr.currentMissionPurpose = GUILayout.TextField(mgr.currentMissionPurpose);
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button(missionEditMode ? "Done" : "Edit", GUILayout.Width(50))) missionEditMode = !missionEditMode;
+            GUILayout.EndHorizontal();
+
+            if (missionEditMode)
+            {
+                mgr.currentMissionPurpose = GUILayout.TextField(mgr.currentMissionPurpose);
+            }
+            else
+            {
+                GUILayout.Label("<color=silver>" + mgr.currentMissionPurpose + "</color>", new GUIStyle(GUI.skin.label) { fontSize = 13, richText = true, wordWrap = true });
+            }
+
+            // --- LINK LOG UI ---
+            GUILayout.Space(5);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("Link Log To:", BoldStyle(12), GUILayout.Width(80));
+            if (linkEditMode)
+            {
+                string dispLinkBtn = string.IsNullOrEmpty(currentLinkedCraft) ? "None" : currentLinkedCraft;
+                if (GUILayout.Button(dispLinkBtn + " ▼", GUI.skin.button, GUILayout.ExpandWidth(true))) showLinkDropdown = !showLinkDropdown;
+            }
+            else
+            {
+                string dispLink = string.IsNullOrEmpty(currentLinkedCraft) ? "None" : currentLinkedCraft;
+                GUILayout.Label("<color=silver>" + dispLink + "</color>", new GUIStyle(GUI.skin.label) { fontSize = 12, richText = true });
+            }
+            if (GUILayout.Button(linkEditMode ? "Done" : "Edit", GUILayout.Width(50)))
+            {
+                linkEditMode = !linkEditMode;
+                if (!linkEditMode) showLinkDropdown = false;
+            }
+            GUILayout.EndHorizontal();
+
+            if (linkEditMode && showLinkDropdown)
+            {
+                GUILayout.BeginVertical("box");
+                linkScrollPos = GUILayout.BeginScrollView(linkScrollPos, GUILayout.Height(100));
+                if (GUILayout.Button("None", craftButtonStyle)) { currentLinkedCraft = "None"; showLinkDropdown = false; }
+
+                List<string> allCrafts = new List<string>(craftFilePaths.Keys);
+                allCrafts.Sort();
+                foreach (string c in allCrafts)
+                {
+                    if (c != currentCraftName) // Ensure a craft cannot link to itself
+                    {
+                        if (GUILayout.Button(c, craftButtonStyle)) { currentLinkedCraft = c; showLinkDropdown = false; }
+                    }
+                }
+                GUILayout.EndScrollView();
+                GUILayout.EndVertical();
+            }
 
             GUILayout.Space(10);
             GUILayout.BeginHorizontal();
             GUILayout.Label("Flight Log", BoldStyle(12));
             GUILayout.FlexibleSpace();
+
+            // --- FLIGHT COUNTER & STATS ---
             string lastLaunch = launchHistory.Count > 0 ? launchHistory[launchHistory.Count - 1].date : "Never";
             int successCount = launchHistory.FindAll(l => l.status == 0).Count;
             float reliability = launchHistory.Count > 0 ? ((float)successCount / launchHistory.Count) * 100f : 0f;
-            GUILayout.Label("<color=silver>L: " + lastLaunch + "  SR: " + reliability.ToString("F0", CultureInfo.InvariantCulture) + "%</color>", BoldStyle(12));
+            GUILayout.Label("<color=silver>Flights: " + launchHistory.Count + "  |  Last Flight: " + lastLaunch + "  |  Success Rate: " + reliability.ToString("F0", CultureInfo.InvariantCulture) + "%</color>", BoldStyle(12));
+
             GUILayout.Space(10);
             if (GUILayout.Button(editMode ? "Done" : "Edit", GUILayout.Width(50))) editMode = !editMode;
             GUILayout.EndHorizontal();
 
             GUILayout.BeginVertical("box");
-            historyScrollPos = GUILayout.BeginScrollView(historyScrollPos, GUILayout.Height(windowRect.height * 0.18f));
+            historyScrollPos = GUILayout.BeginScrollView(historyScrollPos, GUILayout.Height(logHeight));
             GUIStyle logStyle = new GUIStyle(GUI.skin.label) { fontSize = mgr.logFontSize, fontStyle = mgr.logFontBold ? FontStyle.Bold : FontStyle.Normal, richText = true };
             for (int i = launchHistory.Count - 1; i >= 0; i--)
             {
                 GUILayout.BeginHorizontal();
                 if (editMode)
                 {
-                    if (GUILayout.Button(launchHistory[i].status == 0 ? "[S]" : "S", GUILayout.Width(25))) launchHistory[i].status = 0;
-                    if (GUILayout.Button(launchHistory[i].status == 1 ? "[P]" : "P", GUILayout.Width(25))) launchHistory[i].status = 1;
-                    if (GUILayout.Button(launchHistory[i].status == 2 ? "[F]" : "F", GUILayout.Width(25))) launchHistory[i].status = 2;
+                    if (GUILayout.Button(launchHistory[i].status == 0 ? "S" : "S", GUILayout.Width(25))) launchHistory[i].status = 0;
+                    if (GUILayout.Button(launchHistory[i].status == 1 ? "P" : "P", GUILayout.Width(25))) launchHistory[i].status = 1;
+                    if (GUILayout.Button(launchHistory[i].status == 2 ? "F" : "F", GUILayout.Width(25))) launchHistory[i].status = 2;
                     launchHistory[i].purpose = GUILayout.TextField(launchHistory[i].purpose);
                     if (GUILayout.Button("X", GUILayout.Width(22))) { launchHistory.RemoveAt(i); break; }
                 }
@@ -608,6 +816,7 @@ namespace AdvancedVesselInfo
             }
             GUILayout.EndScrollView();
             GUILayout.EndVertical();
+            logHeight = DrawResizeHandle(logHeight, ref isResizingLog);
 
             GUILayout.Space(10);
             GUILayout.BeginHorizontal();
@@ -617,7 +826,7 @@ namespace AdvancedVesselInfo
             GUILayout.EndHorizontal();
 
             GUILayout.BeginVertical("box");
-            payloadScrollPos = GUILayout.BeginScrollView(payloadScrollPos, GUILayout.Height(windowRect.height * 0.15f));
+            payloadScrollPos = GUILayout.BeginScrollView(payloadScrollPos, GUILayout.Height(payHeight));
             GUIStyle payStyle = new GUIStyle(GUI.skin.label) { fontSize = mgr.payFontSize, fontStyle = mgr.payFontBold ? FontStyle.Bold : FontStyle.Normal, richText = true };
             for (int i = 0; i < payloadEntries.Count; i++)
             {
@@ -641,17 +850,25 @@ namespace AdvancedVesselInfo
             GUILayout.EndScrollView();
             if (payloadEditMode && GUILayout.Button("+ Add Capability")) payloadEntries.Add(new PayloadEntry());
             GUILayout.EndVertical();
+            payHeight = DrawResizeHandle(payHeight, ref isResizingPay);
 
             GUILayout.FlexibleSpace();
             if (GUILayout.Button("Save Data", GUILayout.Height(30)))
             {
                 if (HighLogic.LoadedSceneIsEditor && EditorLogic.fetch != null && EditorLogic.fetch.shipNameField != null && currentCraftName == EditorLogic.fetch.shipNameField.text) UpdateAutoSpecs();
-                mgr.SaveCraftData(currentCraftName, customDescription, mgr.currentMissionPurpose, currentFamilyTag, currentPartCount, currentMass, currentCost, payloadEntries, launchHistory);
+                mgr.SaveCraftData(currentCraftName, customDescription, mgr.currentMissionPurpose, currentFamilyTag, currentLinkedCraft, currentPartCount, currentMass, currentCost, payloadEntries, launchHistory);
                 LoadAvailableCrafts();
             }
 
             if (GUILayout.Button("UI Settings", GUILayout.Height(25))) showSettings = !showSettings;
-            if (GUILayout.Button("Close")) { showGui = false; if (toolbarButton != null) toolbarButton.SetFalse(); showSettings = false; }
+
+            // Replaced toolbarButton.SetFalse() with toolbarControl.SetFalse()
+            if (GUILayout.Button("Close"))
+            {
+                showGui = false;
+                if (toolbarControl != null) toolbarControl.SetFalse();
+                showSettings = false;
+            }
             GUI.Label(new Rect(windowRect.width - 15, windowRect.height - 15, 15, 15), "◢");
             GUILayout.EndVertical();
             GUI.DragWindow(new Rect(0, 0, windowRect.width, 20));
@@ -743,20 +960,38 @@ namespace AdvancedVesselInfo
                 {
                     if (GUILayout.Button("Delete", GUILayout.Width(50)))
                     {
-                        AdvancedVesselInfoManager.Instance.customFamilies.Remove(group.Key);
-                        AdvancedVesselInfoManager.Instance.SaveSettings(windowRect, settingsRect, libraryWidth, showCraftList, showHelp);
+                        AdvancedVesselInfoManager.Instance.DeleteFamily(group.Key);
                         LoadAvailableCrafts();
                         break;
                     }
                 }
                 GUILayout.EndHorizontal();
+
                 if (folderExpanded[group.Key])
                 {
+                    bool breakOuter = false;
                     foreach (string craft in group.Value)
                     {
                         if (!string.IsNullOrEmpty(searchTerm) && !craft.ToLower().Contains(searchTerm.ToLower())) continue;
+
+                        GUILayout.BeginHorizontal();
                         if (GUILayout.Button(craft, craftButtonStyle, GUILayout.ExpandWidth(true))) { currentCraftName = craft; LoadCraftData(craft); }
+
+                        // Adds the "X" button to quickly remove a craft from a custom family
+                        if (sortByFamily && group.Key != "Uncategorized")
+                        {
+                            if (GUILayout.Button("X", GUILayout.Width(22)))
+                            {
+                                AdvancedVesselInfoManager.Instance.RemoveCraftFromFamily(craft);
+                                LoadAvailableCrafts();
+                                breakOuter = true;
+                            }
+                        }
+                        GUILayout.EndHorizontal();
+                        if (breakOuter) break;
                     }
+                    // Safely exit the loop to reload the interface smoothly
+                    if (breakOuter) break;
                 }
             }
             GUILayout.EndScrollView();
@@ -784,8 +1019,8 @@ namespace AdvancedVesselInfo
             GUILayout.Label("Define the goal for your mission. This is recorded in the flight log upon launch.", HelpTextStyle());
             GUILayout.Space(8);
 
-            GUILayout.Label("<b>4. Flight Log</b>", BoldStyle(14));
-            GUILayout.Label("Tracks launches automatically. Mark entries as Success, Partial, or Failure to monitor reliability.", HelpTextStyle());
+            GUILayout.Label("<b>4. Flight Log & Link Log</b>", BoldStyle(14));
+            GUILayout.Label("Tracks launches automatically. You can 'Link' a log to another craft to keep your rocket launches bundled even when using payloads.", HelpTextStyle());
             GUILayout.Space(8);
 
             GUILayout.Label("<b>5. Payload Capabilities</b>", BoldStyle(14));
@@ -794,6 +1029,10 @@ namespace AdvancedVesselInfo
 
             GUILayout.Label("<b>6. UI Settings Menu</b>", BoldStyle(14));
             GUILayout.Label("Customize text sizes and styles for better readability.", HelpTextStyle());
+            GUILayout.Space(8);
+
+            GUILayout.Label("<b>7. Link Log To</b>", BoldStyle(14));
+            GUILayout.Label("Redirect the flight log of this craft to another base craft. Useful for payload variations.", HelpTextStyle());
 
             GUILayout.Space(15);
             GUILayout.BeginVertical("box");
@@ -803,7 +1042,7 @@ namespace AdvancedVesselInfo
 
             GUILayout.EndScrollView();
             GUILayout.Space(5);
-            GUILayout.Label("<color=silver><size=10>Advanced Vessel Info v1.6.1\nStatus: Systems Operational</size></color>", new GUIStyle(LogStyle()) { alignment = TextAnchor.MiddleCenter });
+            GUILayout.Label("<color=silver><size=10>Advanced Vessel Info v1.7.0\nStatus: Systems Operational</size></color>", new GUIStyle(LogStyle()) { alignment = TextAnchor.MiddleCenter });
             GUILayout.Space(5);
             GUILayout.EndVertical();
         }
@@ -815,7 +1054,10 @@ namespace AdvancedVesselInfo
         {
             ConfigNode vesselNode = AdvancedVesselInfoManager.Instance.GetVesselNode(shipName);
             payloadEntries.Clear(); launchHistory.Clear();
-            editMode = false; payloadEditMode = false; descriptionEditMode = false; familyEditMode = false; showFamilyDropdown = false;
+            editMode = false; payloadEditMode = false; descriptionEditMode = false;
+            familyEditMode = false; showFamilyDropdown = false;
+            linkEditMode = false; showLinkDropdown = false; currentLinkedCraft = "None";
+            missionEditMode = false;
             currentPartCount = 0; currentMass = 0f; currentCost = 0f; currentFamilyTag = "";
 
             if (vesselNode != null)
@@ -825,7 +1067,10 @@ namespace AdvancedVesselInfo
                 else customDescription = GetVanillaDescription(shipName);
 
                 currentFamilyTag = vesselNode.GetValue("familyTag") ?? "";
-                AdvancedVesselInfoManager.Instance.currentMissionPurpose = vesselNode.GetValue("missionPurpose") ?? "Enter Mission Purpose";
+                currentLinkedCraft = vesselNode.GetValue("linkedLogCraft") ?? "None";
+                if (string.IsNullOrEmpty(currentLinkedCraft)) currentLinkedCraft = "None";
+
+                AdvancedVesselInfoManager.Instance.currentMissionPurpose = vesselNode.GetValue("missionPurpose") ?? "Enter Mission";
 
                 int.TryParse(vesselNode.GetValue("partCount"), out currentPartCount);
                 float.TryParse(vesselNode.GetValue("mass"), NumberStyles.Any, CultureInfo.InvariantCulture, out currentMass);
@@ -846,7 +1091,7 @@ namespace AdvancedVesselInfo
                     foreach (ConfigNode n in payloadNode.GetNodes("ENTRY"))
                         payloadEntries.Add(new PayloadEntry { destination = n.GetValue("dest"), amount = n.GetValue("tons") });
             }
-            else { customDescription = GetVanillaDescription(shipName); AdvancedVesselInfoManager.Instance.currentMissionPurpose = "Enter Mission Purpose here"; }
+            else { customDescription = GetVanillaDescription(shipName); AdvancedVesselInfoManager.Instance.currentMissionPurpose = "Enter Mission"; }
 
             if (currentPartCount == 0 && currentMass == 0f && currentCost == 0f)
             {
@@ -904,12 +1149,23 @@ namespace AdvancedVesselInfo
             }
         }
 
+        // Properly cleans up the ToolbarController button upon destruction.
         void OnDestroy()
         {
             if (AdvancedVesselInfoManager.Instance != null)
+            {
+                AdvancedVesselInfoManager.Instance.savedDescHeight = descHeight;
+                AdvancedVesselInfoManager.Instance.savedLogHeight = logHeight;
+                AdvancedVesselInfoManager.Instance.savedPayHeight = payHeight;
                 AdvancedVesselInfoManager.Instance.SaveSettings(windowRect, settingsRect, libraryWidth, showCraftList, showHelp);
-            GameEvents.onGUIApplicationLauncherReady.Remove(AddToolbarButton);
-            if (toolbarButton != null) { ApplicationLauncher.Instance.RemoveModApplication(toolbarButton); toolbarButton = null; }
+            }
+
+            if (toolbarControl != null)
+            {
+                toolbarControl.OnDestroy();
+                Destroy(toolbarControl);
+                toolbarControl = null;
+            }
         }
 
         private GUIStyle BoldStyle(int size) => new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = size, richText = true };
