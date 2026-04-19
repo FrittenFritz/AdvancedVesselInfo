@@ -45,10 +45,20 @@ namespace AdvancedVesselInfo
             {
                 Instance = this;
                 DontDestroyOnLoad(gameObject);
-                storagePath = Path.Combine(KSPUtil.ApplicationRootPath, "GameData/AdvancedVesselInfo/PluginData/CraftData.cfg");
-                settingsPath = Path.Combine(KSPUtil.ApplicationRootPath, "GameData/AdvancedVesselInfo/PluginData/Settings.cfg");
+
+                // New paths: Data is now stored outside of GameData in the KSP root PluginData folder
+                storagePath = Path.Combine(KSPUtil.ApplicationRootPath, "PluginData/AdvancedVesselInfo/CraftData.cfg");
+                settingsPath = Path.Combine(KSPUtil.ApplicationRootPath, "PluginData/AdvancedVesselInfo/Settings.cfg");
+
+                // Ensure the directory exists before attempting to load or save anything
+                string directoryPath = Path.GetDirectoryName(storagePath);
+                if (!Directory.Exists(directoryPath))
+                {
+                    Directory.CreateDirectory(directoryPath);
+                }
 
                 LoadSettings();
+                LoadFamilies();
                 GameEvents.onLevelWasLoaded.Add(OnLevelLoaded);
 
                 // Register the mod globally ONLY ONCE when the manager is created to prevent duplicates on scene changes.
@@ -57,7 +67,7 @@ namespace AdvancedVesselInfo
             else { Destroy(gameObject); }
         }
 
-        // Reads UI positions, font settings, and custom family tags from the settings configuration file.
+        // Reads UI positions and font settings from the settings configuration file.
         private void LoadSettings()
         {
             if (File.Exists(settingsPath))
@@ -88,17 +98,52 @@ namespace AdvancedVesselInfo
                     if (node.HasValue("descHeight") && float.TryParse(node.GetValue("descHeight"), NumberStyles.Any, CultureInfo.InvariantCulture, out f)) savedDescHeight = f;
                     if (node.HasValue("logHeight") && float.TryParse(node.GetValue("logHeight"), NumberStyles.Any, CultureInfo.InvariantCulture, out f)) savedLogHeight = f;
                     if (node.HasValue("payHeight") && float.TryParse(node.GetValue("payHeight"), NumberStyles.Any, CultureInfo.InvariantCulture, out f)) savedPayHeight = f;
-
-                    ConfigNode famNode = node.GetNode("FAMILIES");
-                    if (famNode != null)
-                    {
-                        foreach (ConfigNode.Value v in famNode.values)
-                        {
-                            if (v.name == "name" && !customFamilies.Contains(v.value))
-                                customFamilies.Add(v.value);
-                        }
-                    }
                 }
+            }
+        }
+
+        // Loads families from CraftData.cfg, or migrates them from Settings.cfg if needed.
+        private void LoadFamilies()
+        {
+            customFamilies.Clear();
+            bool needsMigration = false;
+
+            if (File.Exists(storagePath))
+            {
+                ConfigNode root = ConfigNode.Load(storagePath);
+                if (root != null && root.HasNode("FAMILIES"))
+                {
+                    ConfigNode famNode = root.GetNode("FAMILIES");
+                    foreach (ConfigNode.Value v in famNode.values)
+                    {
+                        if (v.name == "name" && !customFamilies.Contains(v.value))
+                            customFamilies.Add(v.value);
+                    }
+                    return;
+                }
+            }
+
+            if (File.Exists(settingsPath))
+            {
+                ConfigNode settingsNode = ConfigNode.Load(settingsPath);
+                if (settingsNode != null && settingsNode.HasNode("FAMILIES"))
+                {
+                    ConfigNode famNode = settingsNode.GetNode("FAMILIES");
+                    foreach (ConfigNode.Value v in famNode.values)
+                    {
+                        if (v.name == "name" && !customFamilies.Contains(v.value))
+                            customFamilies.Add(v.value);
+                    }
+
+                    settingsNode.RemoveNode("FAMILIES");
+                    settingsNode.Save(settingsPath);
+                    needsMigration = true;
+                }
+            }
+
+            if (needsMigration)
+            {
+                SaveFamilies();
             }
         }
 
@@ -135,20 +180,35 @@ namespace AdvancedVesselInfo
             node.AddValue("logHeight", savedLogHeight.ToString(CultureInfo.InvariantCulture));
             node.AddValue("payHeight", savedPayHeight.ToString(CultureInfo.InvariantCulture));
 
-            ConfigNode famNode = node.AddNode("FAMILIES");
-            foreach (string f in customFamilies)
-                famNode.AddValue("name", f);
-
             node.Save(settingsPath);
+        }
+
+        // Saves the family list directly to the main CraftData file.
+        public void SaveFamilies()
+        {
+            ConfigNode root = File.Exists(storagePath) ? ConfigNode.Load(storagePath) : new ConfigNode();
+
+            if (root.HasNode("FAMILIES")) root.RemoveNode("FAMILIES");
+
+            if (customFamilies.Count > 0)
+            {
+                ConfigNode famNode = root.AddNode("FAMILIES");
+                foreach (string f in customFamilies)
+                    famNode.AddValue("name", f);
+            }
+
+            root.Save(storagePath);
         }
 
         // Deletes a custom family and resets all assigned crafts to Uncategorized.
         public void DeleteFamily(string familyName)
         {
+            bool changed = false;
+
             if (customFamilies.Contains(familyName))
             {
                 customFamilies.Remove(familyName);
-                SaveSettings(savedWindowRect, savedSettingsRect, savedLibraryWidth, savedShowLibrary, savedShowHelp);
+                changed = true; // We modified the family list
             }
 
             if (File.Exists(storagePath))
@@ -156,16 +216,29 @@ namespace AdvancedVesselInfo
                 ConfigNode root = ConfigNode.Load(storagePath);
                 if (root != null)
                 {
-                    bool changed = false;
+                    // Reset all ships that had this family to Uncategorized
                     foreach (ConfigNode node in root.GetNodes())
                     {
-                        if (node.HasValue("familyTag") && node.GetValue("familyTag") == familyName)
+                        if (node.name != "FAMILIES" && node.HasValue("familyTag") && node.GetValue("familyTag") == familyName)
                         {
                             node.SetValue("familyTag", "Uncategorized", true);
-                            changed = true;
+                            changed = true; // We modified a ship's tag
                         }
                     }
-                    if (changed) root.Save(storagePath);
+
+                    // Only save to disk if we actually changed something
+                    if (changed)
+                    {
+                        // Update the FAMILIES block in the save file
+                        if (root.HasNode("FAMILIES")) root.RemoveNode("FAMILIES");
+                        if (customFamilies.Count > 0)
+                        {
+                            ConfigNode famNode = root.AddNode("FAMILIES");
+                            foreach (string f in customFamilies) famNode.AddValue("name", f);
+                        }
+
+                        root.Save(storagePath);
+                    }
                 }
             }
         }
@@ -934,7 +1007,7 @@ namespace AdvancedVesselInfo
                     if (!string.IsNullOrEmpty(cleanFam) && cleanFam != "Uncategorized" && !AdvancedVesselInfoManager.Instance.customFamilies.Contains(cleanFam))
                     {
                         AdvancedVesselInfoManager.Instance.customFamilies.Add(cleanFam);
-                        AdvancedVesselInfoManager.Instance.SaveSettings(windowRect, settingsRect, libraryWidth, showCraftList, showHelp);
+                        AdvancedVesselInfoManager.Instance.SaveFamilies();
                         LoadAvailableCrafts();
                     }
                     newFamilyInput = "";
@@ -1042,7 +1115,7 @@ namespace AdvancedVesselInfo
 
             GUILayout.EndScrollView();
             GUILayout.Space(5);
-            GUILayout.Label("<color=silver><size=10>Advanced Vessel Info v1.7.0\nStatus: Systems Operational</size></color>", new GUIStyle(LogStyle()) { alignment = TextAnchor.MiddleCenter });
+            GUILayout.Label("<color=silver><size=10>Advanced Vessel Info v1.7.1\nStatus: Systems Operational</size></color>", new GUIStyle(LogStyle()) { alignment = TextAnchor.MiddleCenter });
             GUILayout.Space(5);
             GUILayout.EndVertical();
         }
