@@ -305,8 +305,8 @@ namespace AdvancedVesselInfo
             root.Save(storagePath);
         }
 
-        // Saves all custom vessel data including escaped descriptions, payload info, and flight logs.
-        public void SaveCraftData(string shipName, string description, string purpose, string family, string linkedCraft, int parts, float mass, float cost, List<AdvancedVesselInfoUI.PayloadEntry> payloads, List<AdvancedVesselInfoUI.LaunchEntry> history = null)
+        // Saves all custom vessel data including escaped descriptions, payload info, flight logs, and milestones.
+        public void SaveCraftData(string shipName, string description, string purpose, string family, string linkedCraft, int parts, float mass, float cost, List<AdvancedVesselInfoUI.PayloadEntry> payloads, List<AdvancedVesselInfoUI.LaunchEntry> history = null, List<AdvancedVesselInfoUI.MilestoneEntry> milestones = null)
         {
             ConfigNode root = ConfigNode.Load(storagePath) ?? new ConfigNode();
             string nodeName = shipName.Replace(" ", "_");
@@ -346,6 +346,19 @@ namespace AdvancedVesselInfo
                     entry.AddValue("status", log.status.ToString());
                 }
             }
+
+            if (milestones != null)
+            {
+                if (vesselNode.HasNode("MILESTONES")) vesselNode.RemoveNode("MILESTONES");
+                ConfigNode milNode = vesselNode.AddNode("MILESTONES");
+                foreach (var mil in milestones)
+                {
+                    ConfigNode entry = milNode.AddNode("ENTRY");
+                    entry.AddValue("date", mil.date);
+                    entry.AddValue("text", mil.text);
+                }
+            }
+
             root.Save(storagePath);
         }
 
@@ -370,6 +383,7 @@ namespace AdvancedVesselInfo
     {
         public class PayloadEntry { public string destination = "Target"; public string amount = "0.0"; }
         public class LaunchEntry { public string date = ""; public string purpose = ""; public int status = 0; }
+        public class MilestoneEntry { public string date = ""; public string text = ""; }
 
         // Constants used by ToolbarController to identify the mod globally.
         internal const string MODID = "AdvancedVesselInfo";
@@ -392,6 +406,9 @@ namespace AdvancedVesselInfo
         private bool linkEditMode = false;
         private bool showLinkDropdown = false;
         private bool sortByFamily = false;
+
+        private int logTabIndex = 0; // 0 for Flight Log, 1 for Milestones
+        private string newMilestoneInput = "";
 
         private Rect windowRect;
         private Rect listRect = new Rect(0, 0, 250, 650);
@@ -433,9 +450,11 @@ namespace AdvancedVesselInfo
 
         private List<PayloadEntry> payloadEntries = new List<PayloadEntry>();
         private List<LaunchEntry> launchHistory = new List<LaunchEntry>();
+        private List<MilestoneEntry> milestones = new List<MilestoneEntry>();
 
         private Vector2 libraryScrollPos;
         private Vector2 historyScrollPos;
+        private Vector2 milestoneScrollPos;
         private Vector2 payloadScrollPos;
         private Vector2 helpScrollPos;
         private Vector2 descriptionScrollPos;
@@ -851,43 +870,97 @@ namespace AdvancedVesselInfo
             }
 
             GUILayout.Space(10);
+
+            // --- FLIGHT LOG & MILESTONES TAB BAR ---
             GUILayout.BeginHorizontal();
-            GUILayout.Label("Flight Log", BoldStyle(12));
+            if (GUILayout.Toggle(logTabIndex == 0, "Flight Log", GUI.skin.button, GUILayout.Width(100))) logTabIndex = 0;
+            if (GUILayout.Toggle(logTabIndex == 1, "Milestones", GUI.skin.button, GUILayout.Width(100))) logTabIndex = 1;
             GUILayout.FlexibleSpace();
-
-            // --- FLIGHT COUNTER & STATS ---
-            string lastLaunch = launchHistory.Count > 0 ? launchHistory[launchHistory.Count - 1].date : "Never";
-            int successCount = launchHistory.FindAll(l => l.status == 0).Count;
-            float reliability = launchHistory.Count > 0 ? ((float)successCount / launchHistory.Count) * 100f : 0f;
-            GUILayout.Label("<color=silver>Flights: " + launchHistory.Count + "  |  Last Flight: " + lastLaunch + "  |  Success Rate: " + reliability.ToString("F0", CultureInfo.InvariantCulture) + "%</color>", BoldStyle(12));
-
-            GUILayout.Space(10);
             if (GUILayout.Button(editMode ? "Done" : "Edit", GUILayout.Width(50))) editMode = !editMode;
             GUILayout.EndHorizontal();
 
-            GUILayout.BeginVertical("box");
-            historyScrollPos = GUILayout.BeginScrollView(historyScrollPos, GUILayout.Height(logHeight));
-            GUIStyle logStyle = new GUIStyle(GUI.skin.label) { fontSize = mgr.logFontSize, fontStyle = mgr.logFontBold ? FontStyle.Bold : FontStyle.Normal, richText = true };
-            for (int i = launchHistory.Count - 1; i >= 0; i--)
+            // Tab context stats
+            if (logTabIndex == 0)
             {
                 GUILayout.BeginHorizontal();
-                if (editMode)
-                {
-                    if (GUILayout.Button(launchHistory[i].status == 0 ? "S" : "S", GUILayout.Width(25))) launchHistory[i].status = 0;
-                    if (GUILayout.Button(launchHistory[i].status == 1 ? "P" : "P", GUILayout.Width(25))) launchHistory[i].status = 1;
-                    if (GUILayout.Button(launchHistory[i].status == 2 ? "F" : "F", GUILayout.Width(25))) launchHistory[i].status = 2;
-                    launchHistory[i].purpose = GUILayout.TextField(launchHistory[i].purpose);
-                    if (GUILayout.Button("X", GUILayout.Width(22))) { launchHistory.RemoveAt(i); break; }
-                }
-                else
-                {
-                    string statusColor = launchHistory[i].status == 0 ? "#BADA55" : (launchHistory[i].status == 1 ? "yellow" : "red");
-                    string statusText = launchHistory[i].status == 0 ? "[Success]" : (launchHistory[i].status == 1 ? "[Partial]" : "[Failure]");
-                    GUILayout.Label("<color=" + statusColor + ">" + statusText + "</color> <color=silver>" + launchHistory[i].date + ":</color> " + launchHistory[i].purpose, logStyle);
-                }
+                string lastLaunch = launchHistory.Count > 0 ? launchHistory[launchHistory.Count - 1].date : "Never";
+                int successCount = launchHistory.FindAll(l => l.status == 0).Count;
+                float reliability = launchHistory.Count > 0 ? ((float)successCount / launchHistory.Count) * 100f : 0f;
+                GUILayout.Label("<color=silver>Flights: " + launchHistory.Count + "  |  Last Flight: " + lastLaunch + "  |  Success Rate: " + reliability.ToString("F0", CultureInfo.InvariantCulture) + "%</color>", BoldStyle(12));
                 GUILayout.EndHorizontal();
             }
-            GUILayout.EndScrollView();
+            else if (logTabIndex == 1)
+            {
+                GUILayout.BeginHorizontal();
+                GUILayout.Label("<color=silver>Total Milestones: " + milestones.Count + "</color>", BoldStyle(12));
+                GUILayout.EndHorizontal();
+            }
+
+            GUILayout.BeginVertical("box");
+            GUIStyle logStyle = new GUIStyle(GUI.skin.label) { fontSize = mgr.logFontSize, fontStyle = mgr.logFontBold ? FontStyle.Bold : FontStyle.Normal, richText = true };
+
+            if (logTabIndex == 0)
+            {
+                // Flight Log Tab
+                historyScrollPos = GUILayout.BeginScrollView(historyScrollPos, GUILayout.Height(logHeight));
+                for (int i = launchHistory.Count - 1; i >= 0; i--)
+                {
+                    GUILayout.BeginHorizontal();
+                    if (editMode)
+                    {
+                        if (GUILayout.Button(launchHistory[i].status == 0 ? "S" : "S", GUILayout.Width(25))) launchHistory[i].status = 0;
+                        if (GUILayout.Button(launchHistory[i].status == 1 ? "P" : "P", GUILayout.Width(25))) launchHistory[i].status = 1;
+                        if (GUILayout.Button(launchHistory[i].status == 2 ? "F" : "F", GUILayout.Width(25))) launchHistory[i].status = 2;
+                        launchHistory[i].purpose = GUILayout.TextField(launchHistory[i].purpose);
+                        if (GUILayout.Button("X", GUILayout.Width(22))) { launchHistory.RemoveAt(i); break; }
+                    }
+                    else
+                    {
+                        string statusColor = launchHistory[i].status == 0 ? "#BADA55" : (launchHistory[i].status == 1 ? "yellow" : "red");
+                        string statusText = launchHistory[i].status == 0 ? "[Success]" : (launchHistory[i].status == 1 ? "[Partial]" : "[Failure]");
+                        GUILayout.Label("<color=" + statusColor + ">" + statusText + "</color> <color=silver>" + launchHistory[i].date + ":</color> " + launchHistory[i].purpose, logStyle);
+                    }
+                    GUILayout.EndHorizontal();
+                }
+                GUILayout.EndScrollView();
+            }
+            else if (logTabIndex == 1)
+            {
+                // Milestones Tab
+                milestoneScrollPos = GUILayout.BeginScrollView(milestoneScrollPos, GUILayout.Height(logHeight));
+                for (int i = milestones.Count - 1; i >= 0; i--)
+                {
+                    GUILayout.BeginHorizontal();
+                    if (editMode)
+                    {
+                        milestones[i].text = GUILayout.TextField(milestones[i].text);
+                        if (GUILayout.Button("X", GUILayout.Width(22))) { milestones.RemoveAt(i); break; }
+                    }
+                    else
+                    {
+                        GUILayout.Label("<color=yellow>[Milestone]</color> <color=silver>" + milestones[i].date + ":</color> " + milestones[i].text, logStyle);
+                    }
+                    GUILayout.EndHorizontal();
+                }
+                GUILayout.EndScrollView();
+
+                if (editMode)
+                {
+                    GUILayout.BeginHorizontal();
+                    newMilestoneInput = GUILayout.TextField(newMilestoneInput);
+                    if (GUILayout.Button("+ Add", GUILayout.Width(60)))
+                    {
+                        if (!string.IsNullOrEmpty(newMilestoneInput))
+                        {
+                            string dateStr = KSPUtil.PrintDate((int)Planetarium.GetUniversalTime(), true, true);
+                            milestones.Add(new MilestoneEntry { date = dateStr, text = newMilestoneInput });
+                            newMilestoneInput = "";
+                        }
+                    }
+                    GUILayout.EndHorizontal();
+                }
+            }
+
             GUILayout.EndVertical();
             logHeight = DrawResizeHandle(logHeight, ref isResizingLog);
 
@@ -929,7 +1002,7 @@ namespace AdvancedVesselInfo
             if (GUILayout.Button("Save Data", GUILayout.Height(30)))
             {
                 if (HighLogic.LoadedSceneIsEditor && EditorLogic.fetch != null && EditorLogic.fetch.shipNameField != null && currentCraftName == EditorLogic.fetch.shipNameField.text) UpdateAutoSpecs();
-                mgr.SaveCraftData(currentCraftName, customDescription, mgr.currentMissionPurpose, currentFamilyTag, currentLinkedCraft, currentPartCount, currentMass, currentCost, payloadEntries, launchHistory);
+                mgr.SaveCraftData(currentCraftName, customDescription, mgr.currentMissionPurpose, currentFamilyTag, currentLinkedCraft, currentPartCount, currentMass, currentCost, payloadEntries, launchHistory, milestones);
                 LoadAvailableCrafts();
             }
 
@@ -1092,20 +1165,25 @@ namespace AdvancedVesselInfo
             GUILayout.Label("Define the goal for your mission. This is recorded in the flight log upon launch.", HelpTextStyle());
             GUILayout.Space(8);
 
-            GUILayout.Label("<b>4. Flight Log & Link Log</b>", BoldStyle(14));
-            GUILayout.Label("Tracks launches automatically. You can 'Link' a log to another craft to keep your rocket launches bundled even when using payloads.", HelpTextStyle());
+            GUILayout.Label("<b>4. Flight Log</b>", BoldStyle(14));
+            GUILayout.Label("Tracks launches automatically. Define the purpose before launch. Use the Edit button to update success status or add notes.", HelpTextStyle());
             GUILayout.Space(8);
 
-            GUILayout.Label("<b>5. Payload Capabilities</b>", BoldStyle(14));
+            GUILayout.Label("<b>5. Milestones</b>", BoldStyle(14));
+            GUILayout.Label("Manually record important milestones for your vessels (e.g., 'Mun Landing'). Note: Milestones are NOT tracked automatically. You must add them manually using the Edit button as needed.", HelpTextStyle());
+            GUILayout.Space(8);
+
+            GUILayout.Label("<b>6. Link Log To</b>", BoldStyle(14));
+            GUILayout.Label("You can 'Link' a log to another craft to keep your rocket launches bundled even when using varying payloads.", HelpTextStyle());
+            GUILayout.Space(8);
+
+            GUILayout.Label("<b>7. Payload Capabilities</b>", BoldStyle(14));
             GUILayout.Label("Record payload targets. Cost per ton is calculated automatically.", HelpTextStyle());
             GUILayout.Space(8);
 
-            GUILayout.Label("<b>6. UI Settings Menu</b>", BoldStyle(14));
+            GUILayout.Label("<b>8. UI Settings Menu</b>", BoldStyle(14));
             GUILayout.Label("Customize text sizes and styles for better readability.", HelpTextStyle());
             GUILayout.Space(8);
-
-            GUILayout.Label("<b>7. Link Log To</b>", BoldStyle(14));
-            GUILayout.Label("Redirect the flight log of this craft to another base craft. Useful for payload variations.", HelpTextStyle());
 
             GUILayout.Space(15);
             GUILayout.BeginVertical("box");
@@ -1115,7 +1193,7 @@ namespace AdvancedVesselInfo
 
             GUILayout.EndScrollView();
             GUILayout.Space(5);
-            GUILayout.Label("<color=silver><size=10>Advanced Vessel Info v1.7.1\nStatus: Systems Operational</size></color>", new GUIStyle(LogStyle()) { alignment = TextAnchor.MiddleCenter });
+            GUILayout.Label("<color=silver><size=10>Advanced Vessel Info v1.7.2\nStatus: Systems Operational</size></color>", new GUIStyle(LogStyle()) { alignment = TextAnchor.MiddleCenter });
             GUILayout.Space(5);
             GUILayout.EndVertical();
         }
@@ -1125,13 +1203,16 @@ namespace AdvancedVesselInfo
         // Loads all custom saved data for a selected vessel, with automatic fallbacks for missing data.
         private void LoadCraftData(string shipName)
         {
+            currentCraftName = shipName;
+
             ConfigNode vesselNode = AdvancedVesselInfoManager.Instance.GetVesselNode(shipName);
-            payloadEntries.Clear(); launchHistory.Clear();
+            payloadEntries.Clear(); launchHistory.Clear(); milestones.Clear();
             editMode = false; payloadEditMode = false; descriptionEditMode = false;
             familyEditMode = false; showFamilyDropdown = false;
             linkEditMode = false; showLinkDropdown = false; currentLinkedCraft = "None";
             missionEditMode = false;
             currentPartCount = 0; currentMass = 0f; currentCost = 0f; currentFamilyTag = "";
+            newMilestoneInput = ""; // Reset input field on load
 
             if (vesselNode != null)
             {
@@ -1163,6 +1244,15 @@ namespace AdvancedVesselInfo
                 if (payloadNode != null)
                     foreach (ConfigNode n in payloadNode.GetNodes("ENTRY"))
                         payloadEntries.Add(new PayloadEntry { destination = n.GetValue("dest"), amount = n.GetValue("tons") });
+
+                ConfigNode milNode = vesselNode.GetNode("MILESTONES");
+                if (milNode != null)
+                {
+                    foreach (ConfigNode n in milNode.GetNodes("ENTRY"))
+                    {
+                        milestones.Add(new MilestoneEntry { date = n.GetValue("date"), text = n.GetValue("text") });
+                    }
+                }
             }
             else { customDescription = GetVanillaDescription(shipName); AdvancedVesselInfoManager.Instance.currentMissionPurpose = "Enter Mission"; }
 
