@@ -37,6 +37,7 @@ namespace AdvancedVesselInfo
         public float savedLogHeight = 120f;
         public float savedPayHeight = 100f;
 
+        private string lastLoadedSave = "";
         void Awake()
         {
             if (Instance == null)
@@ -60,6 +61,30 @@ namespace AdvancedVesselInfo
                 ToolbarControl.RegisterMod(AdvancedVesselInfoUI.MODID, AdvancedVesselInfoUI.MODNAME);
             }
             else { Destroy(gameObject); }
+        }
+
+        private void InitializeSaveSpecificData()
+        {
+            if (string.IsNullOrEmpty(HighLogic.SaveFolder) || HighLogic.SaveFolder == lastLoadedSave) return;
+            lastLoadedSave = HighLogic.SaveFolder;
+
+            storagePath = Path.Combine(KSPUtil.ApplicationRootPath, "saves", HighLogic.SaveFolder, "PluginData/AdvancedVesselInfo/CraftData.cfg");
+
+            string storageDir = Path.GetDirectoryName(storagePath);
+            if (!Directory.Exists(storageDir))
+            {
+                Directory.CreateDirectory(storageDir);
+            }
+
+            string oldGlobalPath = Path.Combine(KSPUtil.ApplicationRootPath, "PluginData/AdvancedVesselInfo/CraftData.cfg");
+            if (File.Exists(oldGlobalPath) && !File.Exists(storagePath))
+            {
+                File.Move(oldGlobalPath, storagePath);
+            }
+            else if (File.Exists(oldGlobalPath) && File.Exists(storagePath))
+            {
+                File.Delete(oldGlobalPath);
+            }
         }
 
         private void LoadSettings()
@@ -250,6 +275,11 @@ namespace AdvancedVesselInfo
 
         private void OnLevelLoaded(GameScenes scene)
         {
+            if (scene != GameScenes.MAINMENU && scene != GameScenes.SETTINGS && scene != GameScenes.LOADING)
+            {
+                InitializeSaveSpecificData();
+            }
+
             if (scene == GameScenes.FLIGHT && FlightGlobals.ActiveVessel != null)
             {
                 if (FlightGlobals.ActiveVessel.situation == Vessel.Situations.PRELAUNCH)
@@ -261,7 +291,7 @@ namespace AdvancedVesselInfo
             }
         }
 
-        private void LogLaunch(string shipName)
+        public void LogLaunch(string shipName)
         {
             string date = KSPUtil.PrintDate((int)Planetarium.GetUniversalTime(), true, true);
             ConfigNode root = ConfigNode.Load(storagePath) ?? new ConfigNode();
@@ -294,9 +324,15 @@ namespace AdvancedVesselInfo
                 ConfigNode launchEntry = historyNode.AddNode("LAUNCH");
                 launchEntry.AddValue("date", date);
                 launchEntry.AddValue("purpose", currentMissionPurpose);
-                launchEntry.AddValue("status", "0");
+                launchEntry.AddValue("status", "3");
             }
             root.Save(storagePath);
+        }
+
+        public void LogManualEntry(string shipName)
+        {
+            LogLaunch(shipName);
+            ScreenMessages.PostScreenMessage("[Advanced Vessel Info] Mission Logged: " + currentMissionPurpose, 4f, ScreenMessageStyle.LOWER_CENTER);
         }
 
         public void SaveCraftData(string shipName, string description, string purpose, string family, List<string> linkedCrafts, int parts, float mass, float cost, List<AdvancedVesselInfoUI.PayloadEntry> payloads, List<AdvancedVesselInfoUI.LaunchEntry> history = null, List<AdvancedVesselInfoUI.MilestoneEntry> milestones = null)
@@ -456,7 +492,12 @@ namespace AdvancedVesselInfo
 
         private GUIStyle folderHeaderStyle;
         private GUIStyle craftButtonStyle;
+        private GUIStyle selectedCraftStyle;
+        private GUIStyle dotStyle;
         private bool stylesInitialized = false;
+
+        private Dictionary<string, bool> craftHasLogs = new Dictionary<string, bool>();
+        private Dictionary<string, bool> craftHasMilestones = new Dictionary<string, bool>();
 
         void Awake()
         {
@@ -492,6 +533,12 @@ namespace AdvancedVesselInfo
             craftButtonStyle.hover.textColor = new Color(0.73f, 0.85f, 0.33f);
             craftButtonStyle.normal.textColor = Color.white;
             craftButtonStyle.hover.background = MakeTex(2, 2, new Color(1f, 1f, 1f, 0.1f));
+
+            selectedCraftStyle = new GUIStyle(craftButtonStyle);
+            selectedCraftStyle.normal.textColor = new Color(0.73f, 0.85f, 0.33f);
+            selectedCraftStyle.normal.background = MakeTex(2, 2, new Color(1f, 1f, 1f, 0.15f));
+
+            dotStyle = new GUIStyle(GUI.skin.label) { richText = true, alignment = TextAnchor.MiddleCenter, fontSize = 10 };
 
             stylesInitialized = true;
         }
@@ -593,6 +640,8 @@ namespace AdvancedVesselInfo
             craftByFolder.Clear();
             craftByFamily.Clear();
             craftFilePaths.Clear();
+            craftHasLogs.Clear();
+            craftHasMilestones.Clear();
 
             foreach (string f in AdvancedVesselInfoManager.Instance.customFamilies)
             {
@@ -694,6 +743,9 @@ namespace AdvancedVesselInfo
             if (!craftByFamily[family].Contains(craftName)) craftByFamily[family].Add(craftName);
 
             if (!craftFilePaths.ContainsKey(craftName)) craftFilePaths[craftName] = file;
+
+            craftHasLogs[craftName] = savedData != null && savedData.HasNode("HISTORY") && savedData.GetNode("HISTORY").HasNode("LAUNCH");
+            craftHasMilestones[craftName] = savedData != null && savedData.HasNode("MILESTONES") && savedData.GetNode("MILESTONES").HasNode("ENTRY");
         }
 
         private void OnGUI()
@@ -796,11 +848,25 @@ namespace AdvancedVesselInfo
 
             if (missionEditMode)
             {
-                mgr.currentMissionPurpose = GUILayout.TextField(mgr.currentMissionPurpose);
+                GUILayout.BeginHorizontal();
+                mgr.currentMissionPurpose = GUILayout.TextField(mgr.currentMissionPurpose, GUILayout.ExpandWidth(true));
+                if (HighLogic.LoadedSceneIsFlight && GUILayout.Button("Log", GUILayout.Width(40)))
+                {
+                    mgr.LogManualEntry(currentCraftName);
+                    LoadCraftData(currentCraftName);
+                }
+                GUILayout.EndHorizontal();
             }
             else
             {
-                GUILayout.Label("<color=silver>" + mgr.currentMissionPurpose + "</color>", new GUIStyle(GUI.skin.label) { fontSize = 13, richText = true, wordWrap = true });
+                GUILayout.BeginHorizontal();
+                GUILayout.Label("<color=silver>" + mgr.currentMissionPurpose + "</color>", new GUIStyle(GUI.skin.label) { fontSize = 13, richText = true, wordWrap = true }, GUILayout.ExpandWidth(true));
+                if (HighLogic.LoadedSceneIsFlight && GUILayout.Button("Log", GUILayout.Width(40)))
+                {
+                    mgr.LogManualEntry(currentCraftName);
+                    LoadCraftData(currentCraftName);
+                }
+                GUILayout.EndHorizontal();
             }
 
             GUILayout.Space(5);
@@ -887,16 +953,26 @@ namespace AdvancedVesselInfo
                     GUILayout.BeginHorizontal();
                     if (editMode)
                     {
-                        if (GUILayout.Button(launchHistory[i].status == 0 ? "S" : "S", GUILayout.Width(25))) launchHistory[i].status = 0;
-                        if (GUILayout.Button(launchHistory[i].status == 1 ? "P" : "P", GUILayout.Width(25))) launchHistory[i].status = 1;
-                        if (GUILayout.Button(launchHistory[i].status == 2 ? "F" : "F", GUILayout.Width(25))) launchHistory[i].status = 2;
+                        if (StatusButton("S", 0, launchHistory[i].status, new Color(0.73f, 0.85f, 0.33f))) launchHistory[i].status = 0;
+                        if (StatusButton("P", 1, launchHistory[i].status, Color.yellow)) launchHistory[i].status = 1;
+                        if (StatusButton("F", 2, launchHistory[i].status, Color.red)) launchHistory[i].status = 2;
+                        GUILayout.Label("<color=grey>|</color>", new GUIStyle(GUI.skin.label) { richText = true, padding = new RectOffset(2, 2, 0, 0) }, GUILayout.Width(10));
+                        if (StatusButton("O", 3, launchHistory[i].status, new Color(1f, 0.5f, 0f))) launchHistory[i].status = 3;
                         launchHistory[i].purpose = GUILayout.TextField(launchHistory[i].purpose);
                         if (GUILayout.Button("X", GUILayout.Width(22))) { launchHistory.RemoveAt(i); break; }
                     }
                     else
                     {
-                        string statusColor = launchHistory[i].status == 0 ? "#BADA55" : (launchHistory[i].status == 1 ? "yellow" : "red");
-                        string statusText = launchHistory[i].status == 0 ? "[Success]" : (launchHistory[i].status == 1 ? "[Partial]" : "[Failure]");
+                        string statusColor = "orange";
+                        if (launchHistory[i].status == 0) statusColor = "#BADA55";
+                        else if (launchHistory[i].status == 1) statusColor = "yellow";
+                        else if (launchHistory[i].status == 2) statusColor = "red";
+
+                        string statusText = "[Ongoing]";
+                        if (launchHistory[i].status == 0) statusText = "[Success]";
+                        else if (launchHistory[i].status == 1) statusText = "[Partial]";
+                        else if (launchHistory[i].status == 2) statusText = "[Failure]";
+
                         GUILayout.Label("<color=" + statusColor + ">" + statusText + "</color> <color=silver>" + launchHistory[i].date + ":</color> " + launchHistory[i].purpose, logStyle);
                     }
                     GUILayout.EndHorizontal();
@@ -1096,7 +1172,13 @@ namespace AdvancedVesselInfo
                         if (!string.IsNullOrEmpty(searchTerm) && !craft.ToLower().Contains(searchTerm.ToLower())) continue;
 
                         GUILayout.BeginHorizontal();
-                        if (GUILayout.Button(craft, craftButtonStyle, GUILayout.ExpandWidth(true))) { currentCraftName = craft; LoadCraftData(craft); }
+                        GUIStyle currentStyle = (craft == currentCraftName) ? selectedCraftStyle : craftButtonStyle;
+                        if (GUILayout.Button(craft, currentStyle, GUILayout.ExpandWidth(true))) { currentCraftName = craft; LoadCraftData(craft); }
+
+                        string dots = "";
+                        if (craftHasLogs.ContainsKey(craft) && craftHasLogs[craft]) dots += "<color=white>●</color>";
+                        if (craftHasMilestones.ContainsKey(craft) && craftHasMilestones[craft]) dots += "<color=yellow>●</color>";
+                        if (!string.IsNullOrEmpty(dots)) GUILayout.Label(dots, dotStyle, GUILayout.Width(24));
 
                         if (sortByFamily && group.Key != "Uncategorized")
                         {
@@ -1134,11 +1216,11 @@ namespace AdvancedVesselInfo
             GUILayout.Space(8);
 
             GUILayout.Label("<b>3. Mission Purpose</b>", BoldStyle(14));
-            GUILayout.Label("Define the goal for your mission. This is recorded in the flight log upon launch.", HelpTextStyle());
+            GUILayout.Label("Define the goal for your mission. This is recorded in the flight log upon launch or manual entry.", HelpTextStyle());
             GUILayout.Space(8);
 
             GUILayout.Label("<b>4. Flight Log</b>", BoldStyle(14));
-            GUILayout.Label("Tracks launches automatically. Define the purpose before launch. Use the Edit button to update success status or add notes.", HelpTextStyle());
+            GUILayout.Label("Tracks launches automatically or manually via the 'Log' button. New entries default to 'Ongoing'. Use the Edit button to update mission status and notes.", HelpTextStyle());
             GUILayout.Space(8);
 
             GUILayout.Label("<b>5. Milestones</b>", BoldStyle(14));
@@ -1158,14 +1240,21 @@ namespace AdvancedVesselInfo
             GUILayout.Space(8);
 
             GUILayout.Space(15);
-            GUILayout.BeginVertical("box");
-            GUILayout.Label("<b><color=orange>IMPORTANT:</color></b>", BoldStyle(12));
-            GUILayout.Label("Changes are only permanent after clicking <color=white><b>'Save Data'</b></color>!", HelpTextStyle());
+
+            GUIStyle warnBoxStyle = new GUIStyle(GUI.skin.box);
+            warnBoxStyle.normal.background = MakeTex(2, 2, new Color(1f, 0.5f, 0f, 0.1f));
+            warnBoxStyle.padding = new RectOffset(10, 10, 8, 8);
+            warnBoxStyle.margin = new RectOffset(10, 10, 0, 0);
+
+            GUILayout.BeginVertical(warnBoxStyle);
+            GUILayout.Label("<b><color=orange><size=16>⚠️ ATTENTION</size></color></b>", new GUIStyle(GUI.skin.label) { richText = true, alignment = TextAnchor.MiddleCenter });
+            GUILayout.Space(4);
+            GUILayout.Label("All changes must be confirmed via the\n<color=white><b>'Save Data'</b></color> button to be stored permanently!", new GUIStyle(HelpTextStyle()) { alignment = TextAnchor.MiddleCenter, fontSize = 13 });
             GUILayout.EndVertical();
 
             GUILayout.EndScrollView();
             GUILayout.Space(5);
-            GUILayout.Label("<color=silver><size=10>Advanced Vessel Info v1.7.3\nStatus: Systems Operational</size></color>", new GUIStyle(LogStyle()) { alignment = TextAnchor.MiddleCenter });
+            GUILayout.Label("<color=silver><size=10>Advanced Vessel Info v1.7.4\nStatus: Systems Operational</size></color>", new GUIStyle(LogStyle()) { alignment = TextAnchor.MiddleCenter });
             GUILayout.Space(5);
             GUILayout.EndVertical();
         }
@@ -1315,6 +1404,23 @@ namespace AdvancedVesselInfo
         }
 
         private GUIStyle BoldStyle(int size) => new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = size, richText = true };
+
+        private bool StatusButton(string label, int buttonStatus, int currentStatus, Color activeColor)
+        {
+            GUIStyle style = new GUIStyle(GUI.skin.button);
+            style.fontSize = 10;
+            style.richText = true;
+            if (currentStatus == buttonStatus)
+            {
+                style.normal.background = MakeTex(2, 2, activeColor);
+                style.hover.background = MakeTex(2, 2, activeColor);
+                style.active.background = MakeTex(2, 2, activeColor);
+                style.normal.textColor = Color.black;
+                style.hover.textColor = Color.black;
+            }
+            return GUILayout.Button(currentStatus == buttonStatus ? "<b>" + label + "</b>" : label, style, GUILayout.Width(25), GUILayout.Height(18));
+        }
+
         private GUIStyle LogStyle() => new GUIStyle(GUI.skin.label) { fontSize = 11, richText = true };
     }
 }
