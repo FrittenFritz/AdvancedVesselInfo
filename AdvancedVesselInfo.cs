@@ -1,16 +1,15 @@
-﻿using UnityEngine;
+using UnityEngine;
 using KSP.UI.Screens;
 using System.Collections.Generic;
 using System.IO;
 using System;
 using KSP.Localization;
 using System.Globalization;
-using ClickThroughFix; // ClickThroughBlocker support
-using ToolbarControl_NS; // ToolbarController support
+using ClickThroughFix;
+using ToolbarControl_NS;
 
 namespace AdvancedVesselInfo
 {
-    // The Manager class handles background data logic, persistence, and automated tracking.
     [KSPAddon(KSPAddon.Startup.AllGameScenes, true)]
     public class AdvancedVesselInfoManager : MonoBehaviour
     {
@@ -38,7 +37,6 @@ namespace AdvancedVesselInfo
         public float savedLogHeight = 120f;
         public float savedPayHeight = 100f;
 
-        // Initializes the plugin, sets up file paths, and ensures only one instance exists.
         void Awake()
         {
             if (Instance == null)
@@ -46,11 +44,9 @@ namespace AdvancedVesselInfo
                 Instance = this;
                 DontDestroyOnLoad(gameObject);
 
-                // New paths: Data is now stored outside of GameData in the KSP root PluginData folder
                 storagePath = Path.Combine(KSPUtil.ApplicationRootPath, "PluginData/AdvancedVesselInfo/CraftData.cfg");
                 settingsPath = Path.Combine(KSPUtil.ApplicationRootPath, "PluginData/AdvancedVesselInfo/Settings.cfg");
 
-                // Ensure the directory exists before attempting to load or save anything
                 string directoryPath = Path.GetDirectoryName(storagePath);
                 if (!Directory.Exists(directoryPath))
                 {
@@ -61,13 +57,11 @@ namespace AdvancedVesselInfo
                 LoadFamilies();
                 GameEvents.onLevelWasLoaded.Add(OnLevelLoaded);
 
-                // Register the mod globally ONLY ONCE when the manager is created to prevent duplicates on scene changes.
                 ToolbarControl.RegisterMod(AdvancedVesselInfoUI.MODID, AdvancedVesselInfoUI.MODNAME);
             }
             else { Destroy(gameObject); }
         }
 
-        // Reads UI positions and font settings from the settings configuration file.
         private void LoadSettings()
         {
             if (File.Exists(settingsPath))
@@ -102,7 +96,6 @@ namespace AdvancedVesselInfo
             }
         }
 
-        // Loads families from CraftData.cfg, or migrates them from Settings.cfg if needed.
         private void LoadFamilies()
         {
             customFamilies.Clear();
@@ -147,7 +140,6 @@ namespace AdvancedVesselInfo
             }
         }
 
-        // Saves current UI state, window positions, and font preferences to the configuration file.
         public void SaveSettings(Rect winRect, Rect setRect, float libWidth, bool showLib, bool showHelp)
         {
             savedWindowRect = winRect;
@@ -183,7 +175,6 @@ namespace AdvancedVesselInfo
             node.Save(settingsPath);
         }
 
-        // Saves the family list directly to the main CraftData file.
         public void SaveFamilies()
         {
             ConfigNode root = File.Exists(storagePath) ? ConfigNode.Load(storagePath) : new ConfigNode();
@@ -200,7 +191,6 @@ namespace AdvancedVesselInfo
             root.Save(storagePath);
         }
 
-        // Deletes a custom family and resets all assigned crafts to Uncategorized.
         public void DeleteFamily(string familyName)
         {
             bool changed = false;
@@ -208,7 +198,7 @@ namespace AdvancedVesselInfo
             if (customFamilies.Contains(familyName))
             {
                 customFamilies.Remove(familyName);
-                changed = true; // We modified the family list
+                changed = true;
             }
 
             if (File.Exists(storagePath))
@@ -216,20 +206,17 @@ namespace AdvancedVesselInfo
                 ConfigNode root = ConfigNode.Load(storagePath);
                 if (root != null)
                 {
-                    // Reset all ships that had this family to Uncategorized
                     foreach (ConfigNode node in root.GetNodes())
                     {
                         if (node.name != "FAMILIES" && node.HasValue("familyTag") && node.GetValue("familyTag") == familyName)
                         {
                             node.SetValue("familyTag", "Uncategorized", true);
-                            changed = true; // We modified a ship's tag
+                            changed = true;
                         }
                     }
 
-                    // Only save to disk if we actually changed something
                     if (changed)
                     {
-                        // Update the FAMILIES block in the save file
                         if (root.HasNode("FAMILIES")) root.RemoveNode("FAMILIES");
                         if (customFamilies.Count > 0)
                         {
@@ -243,7 +230,6 @@ namespace AdvancedVesselInfo
             }
         }
 
-        // Resets the family tag of a specific craft back to Uncategorized.
         public void RemoveCraftFromFamily(string shipName)
         {
             if (File.Exists(storagePath))
@@ -262,7 +248,6 @@ namespace AdvancedVesselInfo
             }
         }
 
-        // Event handler that detects when a flight begins to automatically record the launch.
         private void OnLevelLoaded(GameScenes scene)
         {
             if (scene == GameScenes.FLIGHT && FlightGlobals.ActiveVessel != null)
@@ -276,49 +261,61 @@ namespace AdvancedVesselInfo
             }
         }
 
-        // Creates a new timestamped flight log entry for the current vessel or its linked alias.
         private void LogLaunch(string shipName)
         {
             string date = KSPUtil.PrintDate((int)Planetarium.GetUniversalTime(), true, true);
             ConfigNode root = ConfigNode.Load(storagePath) ?? new ConfigNode();
             string nodeName = shipName.Replace(" ", "_");
 
-            // Check for linked craft
             ConfigNode sourceNode = root.GetNode(nodeName);
-            string targetNodeName = nodeName;
+            List<string> targetNodes = new List<string>();
 
             if (sourceNode != null && sourceNode.HasValue("linkedLogCraft"))
             {
-                string link = sourceNode.GetValue("linkedLogCraft");
-                if (!string.IsNullOrEmpty(link) && link != "None")
+                string[] links = sourceNode.GetValues("linkedLogCraft");
+                foreach (string link in links)
                 {
-                    targetNodeName = link.Replace(" ", "_");
+                    if (!string.IsNullOrEmpty(link) && link != "None")
+                    {
+                        targetNodes.Add(link.Replace(" ", "_"));
+                    }
                 }
             }
 
-            ConfigNode vesselNode = root.GetNode(targetNodeName) ?? root.AddNode(targetNodeName);
-            ConfigNode historyNode = vesselNode.GetNode("HISTORY") ?? vesselNode.AddNode("HISTORY");
-            ConfigNode launchEntry = historyNode.AddNode("LAUNCH");
-            launchEntry.AddValue("date", date);
-            launchEntry.AddValue("purpose", currentMissionPurpose);
-            launchEntry.AddValue("status", "0");
+            if (targetNodes.Count == 0)
+            {
+                targetNodes.Add(nodeName);
+            }
+
+            foreach (string target in targetNodes)
+            {
+                ConfigNode vesselNode = root.GetNode(target) ?? root.AddNode(target);
+                ConfigNode historyNode = vesselNode.GetNode("HISTORY") ?? vesselNode.AddNode("HISTORY");
+                ConfigNode launchEntry = historyNode.AddNode("LAUNCH");
+                launchEntry.AddValue("date", date);
+                launchEntry.AddValue("purpose", currentMissionPurpose);
+                launchEntry.AddValue("status", "0");
+            }
             root.Save(storagePath);
         }
 
-        // Saves all custom vessel data including escaped descriptions, payload info, flight logs, and milestones.
-        public void SaveCraftData(string shipName, string description, string purpose, string family, string linkedCraft, int parts, float mass, float cost, List<AdvancedVesselInfoUI.PayloadEntry> payloads, List<AdvancedVesselInfoUI.LaunchEntry> history = null, List<AdvancedVesselInfoUI.MilestoneEntry> milestones = null)
+        public void SaveCraftData(string shipName, string description, string purpose, string family, List<string> linkedCrafts, int parts, float mass, float cost, List<AdvancedVesselInfoUI.PayloadEntry> payloads, List<AdvancedVesselInfoUI.LaunchEntry> history = null, List<AdvancedVesselInfoUI.MilestoneEntry> milestones = null)
         {
             ConfigNode root = ConfigNode.Load(storagePath) ?? new ConfigNode();
             string nodeName = shipName.Replace(" ", "_");
             ConfigNode vesselNode = root.GetNode(nodeName) ?? root.AddNode(nodeName);
 
-            // Escaping newlines to \n ensures data integrity within the KSP ConfigNode format.
             string safeDesc = string.IsNullOrEmpty(description) ? "" : description.Replace("\n", "\\n");
             vesselNode.SetValue("description", safeDesc, true);
 
             vesselNode.SetValue("missionPurpose", purpose, true);
             vesselNode.SetValue("familyTag", family, true);
-            vesselNode.SetValue("linkedLogCraft", linkedCraft, true);
+
+            vesselNode.RemoveValues("linkedLogCraft");
+            if (linkedCrafts != null && linkedCrafts.Count > 0)
+            {
+                foreach (string link in linkedCrafts) vesselNode.AddValue("linkedLogCraft", link);
+            }
             vesselNode.SetValue("partCount", parts.ToString(), true);
             vesselNode.SetValue("mass", mass.ToString("F2", CultureInfo.InvariantCulture), true);
             vesselNode.SetValue("cost", cost.ToString("F2", CultureInfo.InvariantCulture), true);
@@ -362,7 +359,6 @@ namespace AdvancedVesselInfo
             root.Save(storagePath);
         }
 
-        // Fetches the specific data node for a vessel from the saved database.
         public ConfigNode GetVesselNode(string shipName)
         {
             if (!File.Exists(storagePath)) return null;
@@ -377,7 +373,6 @@ namespace AdvancedVesselInfo
         }
     }
 
-    // The UI class manages the visual interface, window drawing, and user interactions.
     [KSPAddon(KSPAddon.Startup.AllGameScenes, false)]
     public class AdvancedVesselInfoUI : MonoBehaviour
     {
@@ -385,11 +380,9 @@ namespace AdvancedVesselInfo
         public class LaunchEntry { public string date = ""; public string purpose = ""; public int status = 0; }
         public class MilestoneEntry { public string date = ""; public string text = ""; }
 
-        // Constants used by ToolbarController to identify the mod globally.
         internal const string MODID = "AdvancedVesselInfo";
         internal const string MODNAME = "Advanced Vessel Info";
 
-        // ToolbarController replaces the standard ApplicationLauncherButton.
         private static ToolbarControl toolbarControl = null;
 
         private bool showGui = false;
@@ -407,7 +400,7 @@ namespace AdvancedVesselInfo
         private bool showLinkDropdown = false;
         private bool sortByFamily = false;
 
-        private int logTabIndex = 0; // 0 for Flight Log, 1 for Milestones
+        private int logTabIndex = 0;
         private string newMilestoneInput = "";
 
         private Rect windowRect;
@@ -443,7 +436,7 @@ namespace AdvancedVesselInfo
         private string currentCraftName = "";
         private string customDescription = "";
         private string currentFamilyTag = "";
-        private string currentLinkedCraft = "None";
+        private List<string> currentLinkedCrafts = new List<string>();
         private int currentPartCount = 0;
         private float currentMass = 0f;
         private float currentCost = 0f;
@@ -465,7 +458,6 @@ namespace AdvancedVesselInfo
         private GUIStyle craftButtonStyle;
         private bool stylesInitialized = false;
 
-        // Sets up initial UI states and subscribes to editor events for live updates.
         void Awake()
         {
             windowRect = AdvancedVesselInfoManager.Instance.savedWindowRect;
@@ -478,13 +470,11 @@ namespace AdvancedVesselInfo
             logHeight = AdvancedVesselInfoManager.Instance.savedLogHeight;
             payHeight = AdvancedVesselInfoManager.Instance.savedPayHeight;
 
-            // Initialize the ToolbarController directly instead of waiting for ApplicationLauncher.
             if (toolbarControl == null) AddToolbarButton();
 
             if (HighLogic.LoadedSceneIsEditor) GameEvents.onEditorShipModified.Add((ship) => SyncWithCurrentEditor());
         }
 
-        // Defines custom UI styles like backgrounds and text colors used throughout the plugin.
         private void InitializeStyles()
         {
             if (stylesInitialized) return;
@@ -506,7 +496,6 @@ namespace AdvancedVesselInfo
             stylesInitialized = true;
         }
 
-        // Generates a simple texture from a single color for UI element backgrounds.
         private Texture2D MakeTex(int width, int height, Color col)
         {
             Color[] pix = new Color[width * height];
@@ -517,7 +506,6 @@ namespace AdvancedVesselInfo
             return result;
         }
 
-        // Helper method to draw a draggable handle for resizing UI sections
         private float DrawResizeHandle(float currentHeight, ref bool isResizingFlag)
         {
             GUILayout.Box("≡", new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fixedHeight = 10, padding = new RectOffset(0, 0, 0, 0) }, GUILayout.ExpandWidth(true));
@@ -547,7 +535,6 @@ namespace AdvancedVesselInfo
             return currentHeight;
         }
 
-        // Synchronizes the plugin with the current ship being edited in the VAB or SPH.
         private void SyncWithCurrentEditor()
         {
             if (EditorLogic.fetch != null && EditorLogic.fetch.shipNameField != null)
@@ -561,7 +548,6 @@ namespace AdvancedVesselInfo
             }
         }
 
-        // Automatically fetches part count, mass, and cost directly from the editor logic.
         private void UpdateAutoSpecs()
         {
             if (HighLogic.LoadedSceneIsEditor && EditorLogic.fetch != null && EditorLogic.fetch.ship != null && EditorLogic.fetch.ship.parts != null)
@@ -575,7 +561,6 @@ namespace AdvancedVesselInfo
             }
         }
 
-        // Adds the mod's icon to both Blizzy's toolbar and the stock toolbar via ToolbarController.
         void AddToolbarButton()
         {
             if (toolbarControl == null)
@@ -603,7 +588,6 @@ namespace AdvancedVesselInfo
             }
         }
 
-        // Scans the KSP directory structure to build a list of all available .craft files.
         private void LoadAvailableCrafts()
         {
             craftByFolder.Clear();
@@ -631,7 +615,6 @@ namespace AdvancedVesselInfo
             foreach (var key in new List<string>(craftByFamily.Keys)) { craftByFamily[key].Sort(); }
         }
 
-        // Direct scan for .craft files in official save and ship folders.
         private void ScanDirectoryExact(string folderPath, string categoryName)
         {
             if (!Directory.Exists(folderPath)) return;
@@ -640,7 +623,6 @@ namespace AdvancedVesselInfo
             foreach (string file in files) { AddCraftToCategory(file, categoryName); }
         }
 
-        // Deep-scans GameData for modded ships.
         private void ScanGameDataForShips(string gameDataPath)
         {
             if (!Directory.Exists(gameDataPath)) return;
@@ -668,7 +650,6 @@ namespace AdvancedVesselInfo
             }
         }
 
-        // Reads the first few lines of a .craft file to check if it's a VAB or SPH vessel.
         private string GetVesselType(string filePath)
         {
             try
@@ -686,7 +667,6 @@ namespace AdvancedVesselInfo
             return "VAB";
         }
 
-        // Organizes crafts into both physical folder categories and custom metadata family groups.
         private void AddCraftToCategory(string file, string categoryName)
         {
             string craftName = Path.GetFileNameWithoutExtension(file);
@@ -716,14 +696,12 @@ namespace AdvancedVesselInfo
             if (!craftFilePaths.ContainsKey(craftName)) craftFilePaths[craftName] = file;
         }
 
-        // Main rendering loop for all active plugin windows.
         private void OnGUI()
         {
             if (!showGui) return;
 
             Vector2 oldMainPos = new Vector2(windowRect.x, windowRect.y);
 
-            // Replaced GUILayout.Window with ClickThruBlocker.GUILayoutWindow
             windowRect = ClickThruBlocker.GUILayoutWindow(8842, windowRect, DrawWindowContent, "Advanced Vessel Info");
 
             if (windowRect.x != oldMainPos.x || windowRect.y != oldMainPos.y)
@@ -738,23 +716,19 @@ namespace AdvancedVesselInfo
                 listRect.y = windowRect.y;
                 listRect.width = libraryWidth;
                 listRect.height = windowRect.height;
-                // Replaced GUILayout.Window with ClickThruBlocker.GUILayoutWindow
                 listRect = ClickThruBlocker.GUILayoutWindow(8845, listRect, DrawCraftList, "Craft Library");
             }
             if (showHelp)
             {
                 helpRect.x = windowRect.x + windowRect.width; helpRect.y = windowRect.y; helpRect.height = windowRect.height;
-                // Replaced GUILayout.Window with ClickThruBlocker.GUILayoutWindow
                 helpRect = ClickThruBlocker.GUILayoutWindow(8843, helpRect, DrawHelpContent, "System Help");
             }
 
-            // Replaced GUILayout.Window with ClickThruBlocker.GUILayoutWindow
             if (showSettings) settingsRect = ClickThruBlocker.GUILayoutWindow(8846, settingsRect, DrawSettingsWindow, "UI Settings");
 
             HandleResize();
         }
 
-        // Renders the main data display containing vessel specs, descriptions, logs, and payloads.
         private void DrawWindowContent(int windowID)
         {
             var mgr = AdvancedVesselInfoManager.Instance;
@@ -829,20 +803,10 @@ namespace AdvancedVesselInfo
                 GUILayout.Label("<color=silver>" + mgr.currentMissionPurpose + "</color>", new GUIStyle(GUI.skin.label) { fontSize = 13, richText = true, wordWrap = true });
             }
 
-            // --- LINK LOG UI ---
             GUILayout.Space(5);
             GUILayout.BeginHorizontal();
             GUILayout.Label("Link Log To:", BoldStyle(12), GUILayout.Width(80));
-            if (linkEditMode)
-            {
-                string dispLinkBtn = string.IsNullOrEmpty(currentLinkedCraft) ? "None" : currentLinkedCraft;
-                if (GUILayout.Button(dispLinkBtn + " ▼", GUI.skin.button, GUILayout.ExpandWidth(true))) showLinkDropdown = !showLinkDropdown;
-            }
-            else
-            {
-                string dispLink = string.IsNullOrEmpty(currentLinkedCraft) ? "None" : currentLinkedCraft;
-                GUILayout.Label("<color=silver>" + dispLink + "</color>", new GUIStyle(GUI.skin.label) { fontSize = 12, richText = true });
-            }
+            GUILayout.FlexibleSpace();
             if (GUILayout.Button(linkEditMode ? "Done" : "Edit", GUILayout.Width(50)))
             {
                 linkEditMode = !linkEditMode;
@@ -850,28 +814,45 @@ namespace AdvancedVesselInfo
             }
             GUILayout.EndHorizontal();
 
-            if (linkEditMode && showLinkDropdown)
+            if (!linkEditMode)
+            {
+                string dispLink = currentLinkedCrafts.Count > 0 ? string.Join(", ", currentLinkedCrafts) : "None";
+                GUILayout.Label("<color=silver>" + dispLink + "</color>", new GUIStyle(GUI.skin.label) { fontSize = 12, richText = true, wordWrap = true });
+            }
+            else
             {
                 GUILayout.BeginVertical("box");
-                linkScrollPos = GUILayout.BeginScrollView(linkScrollPos, GUILayout.Height(100));
-                if (GUILayout.Button("None", craftButtonStyle)) { currentLinkedCraft = "None"; showLinkDropdown = false; }
-
-                List<string> allCrafts = new List<string>(craftFilePaths.Keys);
-                allCrafts.Sort();
-                foreach (string c in allCrafts)
+                for (int i = 0; i < currentLinkedCrafts.Count; i++)
                 {
-                    if (c != currentCraftName) // Ensure a craft cannot link to itself
-                    {
-                        if (GUILayout.Button(c, craftButtonStyle)) { currentLinkedCraft = c; showLinkDropdown = false; }
-                    }
+                    GUILayout.BeginHorizontal();
+                    GUILayout.Label("• " + currentLinkedCrafts[i], new GUIStyle(GUI.skin.label) { fontSize = 12 });
+                    if (GUILayout.Button("X", GUILayout.Width(22))) { currentLinkedCrafts.RemoveAt(i); break; }
+                    GUILayout.EndHorizontal();
                 }
-                GUILayout.EndScrollView();
+
+                if (GUILayout.Button("+ Add Craft", GUI.skin.button, GUILayout.ExpandWidth(true))) showLinkDropdown = !showLinkDropdown;
+
+                if (showLinkDropdown)
+                {
+                    GUILayout.BeginVertical("box");
+                    linkScrollPos = GUILayout.BeginScrollView(linkScrollPos, GUILayout.Height(100));
+                    List<string> allCrafts = new List<string>(craftFilePaths.Keys);
+                    allCrafts.Sort();
+                    foreach (string c in allCrafts)
+                    {
+                        if (c != currentCraftName && !currentLinkedCrafts.Contains(c))
+                        {
+                            if (GUILayout.Button(c, craftButtonStyle)) { currentLinkedCrafts.Add(c); showLinkDropdown = false; }
+                        }
+                    }
+                    GUILayout.EndScrollView();
+                    GUILayout.EndVertical();
+                }
                 GUILayout.EndVertical();
             }
 
             GUILayout.Space(10);
 
-            // --- FLIGHT LOG & MILESTONES TAB BAR ---
             GUILayout.BeginHorizontal();
             if (GUILayout.Toggle(logTabIndex == 0, "Flight Log", GUI.skin.button, GUILayout.Width(100))) logTabIndex = 0;
             if (GUILayout.Toggle(logTabIndex == 1, "Milestones", GUI.skin.button, GUILayout.Width(100))) logTabIndex = 1;
@@ -879,7 +860,6 @@ namespace AdvancedVesselInfo
             if (GUILayout.Button(editMode ? "Done" : "Edit", GUILayout.Width(50))) editMode = !editMode;
             GUILayout.EndHorizontal();
 
-            // Tab context stats
             if (logTabIndex == 0)
             {
                 GUILayout.BeginHorizontal();
@@ -901,7 +881,6 @@ namespace AdvancedVesselInfo
 
             if (logTabIndex == 0)
             {
-                // Flight Log Tab
                 historyScrollPos = GUILayout.BeginScrollView(historyScrollPos, GUILayout.Height(logHeight));
                 for (int i = launchHistory.Count - 1; i >= 0; i--)
                 {
@@ -926,7 +905,6 @@ namespace AdvancedVesselInfo
             }
             else if (logTabIndex == 1)
             {
-                // Milestones Tab
                 milestoneScrollPos = GUILayout.BeginScrollView(milestoneScrollPos, GUILayout.Height(logHeight));
                 for (int i = milestones.Count - 1; i >= 0; i--)
                 {
@@ -1002,13 +980,12 @@ namespace AdvancedVesselInfo
             if (GUILayout.Button("Save Data", GUILayout.Height(30)))
             {
                 if (HighLogic.LoadedSceneIsEditor && EditorLogic.fetch != null && EditorLogic.fetch.shipNameField != null && currentCraftName == EditorLogic.fetch.shipNameField.text) UpdateAutoSpecs();
-                mgr.SaveCraftData(currentCraftName, customDescription, mgr.currentMissionPurpose, currentFamilyTag, currentLinkedCraft, currentPartCount, currentMass, currentCost, payloadEntries, launchHistory, milestones);
+                mgr.SaveCraftData(currentCraftName, customDescription, mgr.currentMissionPurpose, currentFamilyTag, currentLinkedCrafts, currentPartCount, currentMass, currentCost, payloadEntries, launchHistory, milestones);
                 LoadAvailableCrafts();
             }
 
             if (GUILayout.Button("UI Settings", GUILayout.Height(25))) showSettings = !showSettings;
 
-            // Replaced toolbarButton.SetFalse() with toolbarControl.SetFalse()
             if (GUILayout.Button("Close"))
             {
                 showGui = false;
@@ -1020,7 +997,6 @@ namespace AdvancedVesselInfo
             GUI.DragWindow(new Rect(0, 0, windowRect.width, 20));
         }
 
-        // Renders the separate settings menu for customizing font sizes and weights.
         private void DrawSettingsWindow(int windowID)
         {
             var mgr = AdvancedVesselInfoManager.Instance;
@@ -1060,7 +1036,6 @@ namespace AdvancedVesselInfo
             GUI.DragWindow(new Rect(0, 0, settingsRect.width, 20));
         }
 
-        // Renders the side library window for searching and selecting vessels.
         private void DrawCraftList(int windowID)
         {
             InitializeStyles();
@@ -1123,7 +1098,6 @@ namespace AdvancedVesselInfo
                         GUILayout.BeginHorizontal();
                         if (GUILayout.Button(craft, craftButtonStyle, GUILayout.ExpandWidth(true))) { currentCraftName = craft; LoadCraftData(craft); }
 
-                        // Adds the "X" button to quickly remove a craft from a custom family
                         if (sortByFamily && group.Key != "Uncategorized")
                         {
                             if (GUILayout.Button("X", GUILayout.Width(22)))
@@ -1136,7 +1110,6 @@ namespace AdvancedVesselInfo
                         GUILayout.EndHorizontal();
                         if (breakOuter) break;
                     }
-                    // Safely exit the loop to reload the interface smoothly
                     if (breakOuter) break;
                 }
             }
@@ -1145,7 +1118,6 @@ namespace AdvancedVesselInfo
             GUILayout.EndVertical();
         }
 
-        // Renders the interactive documentation panel with usage guides.
         private void DrawHelpContent(int windowID)
         {
             GUILayout.BeginVertical();
@@ -1174,7 +1146,7 @@ namespace AdvancedVesselInfo
             GUILayout.Space(8);
 
             GUILayout.Label("<b>6. Link Log To</b>", BoldStyle(14));
-            GUILayout.Label("You can 'Link' a log to another craft to keep your rocket launches bundled even when using varying payloads.", HelpTextStyle());
+            GUILayout.Label("You can 'Link' a log to one or multiple crafts to keep your rocket launches bundled even when using varying payloads. All added crafts will receive the launch log.", HelpTextStyle());
             GUILayout.Space(8);
 
             GUILayout.Label("<b>7. Payload Capabilities</b>", BoldStyle(14));
@@ -1193,14 +1165,13 @@ namespace AdvancedVesselInfo
 
             GUILayout.EndScrollView();
             GUILayout.Space(5);
-            GUILayout.Label("<color=silver><size=10>Advanced Vessel Info v1.7.2\nStatus: Systems Operational</size></color>", new GUIStyle(LogStyle()) { alignment = TextAnchor.MiddleCenter });
+            GUILayout.Label("<color=silver><size=10>Advanced Vessel Info v1.7.3\nStatus: Systems Operational</size></color>", new GUIStyle(LogStyle()) { alignment = TextAnchor.MiddleCenter });
             GUILayout.Space(5);
             GUILayout.EndVertical();
         }
 
         private GUIStyle HelpTextStyle() => new GUIStyle(GUI.skin.label) { wordWrap = true, fontSize = 13, richText = true, padding = new RectOffset(5, 5, 2, 2) };
 
-        // Loads all custom saved data for a selected vessel, with automatic fallbacks for missing data.
         private void LoadCraftData(string shipName)
         {
             currentCraftName = shipName;
@@ -1209,10 +1180,10 @@ namespace AdvancedVesselInfo
             payloadEntries.Clear(); launchHistory.Clear(); milestones.Clear();
             editMode = false; payloadEditMode = false; descriptionEditMode = false;
             familyEditMode = false; showFamilyDropdown = false;
-            linkEditMode = false; showLinkDropdown = false; currentLinkedCraft = "None";
+            linkEditMode = false; showLinkDropdown = false; currentLinkedCrafts.Clear();
             missionEditMode = false;
             currentPartCount = 0; currentMass = 0f; currentCost = 0f; currentFamilyTag = "";
-            newMilestoneInput = ""; // Reset input field on load
+            newMilestoneInput = "";
 
             if (vesselNode != null)
             {
@@ -1221,8 +1192,18 @@ namespace AdvancedVesselInfo
                 else customDescription = GetVanillaDescription(shipName);
 
                 currentFamilyTag = vesselNode.GetValue("familyTag") ?? "";
-                currentLinkedCraft = vesselNode.GetValue("linkedLogCraft") ?? "None";
-                if (string.IsNullOrEmpty(currentLinkedCraft)) currentLinkedCraft = "None";
+                currentLinkedCrafts.Clear();
+                if (vesselNode.HasValue("linkedLogCraft"))
+                {
+                    string[] links = vesselNode.GetValues("linkedLogCraft");
+                    foreach (string link in links)
+                    {
+                        if (!string.IsNullOrEmpty(link) && link != "None")
+                            currentLinkedCrafts.Add(link);
+                    }
+                }
+                if (currentLinkedCrafts.Count == 0)
+                    currentLinkedCrafts.Add(shipName);
 
                 AdvancedVesselInfoManager.Instance.currentMissionPurpose = vesselNode.GetValue("missionPurpose") ?? "Enter Mission";
 
@@ -1254,7 +1235,12 @@ namespace AdvancedVesselInfo
                     }
                 }
             }
-            else { customDescription = GetVanillaDescription(shipName); AdvancedVesselInfoManager.Instance.currentMissionPurpose = "Enter Mission"; }
+            else
+            {
+                customDescription = GetVanillaDescription(shipName);
+                AdvancedVesselInfoManager.Instance.currentMissionPurpose = "Enter Mission";
+                currentLinkedCrafts.Add(shipName);
+            }
 
             if (currentPartCount == 0 && currentMass == 0f && currentCost == 0f)
             {
@@ -1276,7 +1262,6 @@ namespace AdvancedVesselInfo
             if (HighLogic.LoadedSceneIsEditor && EditorLogic.fetch != null && EditorLogic.fetch.shipNameField != null && currentCraftName == EditorLogic.fetch.shipNameField.text) UpdateAutoSpecs();
         }
 
-        // Reads the original description directly from the .craft file if no custom metadata exists.
         private string GetVanillaDescription(string shipName)
         {
             if (craftFilePaths.ContainsKey(shipName))
@@ -1291,7 +1276,6 @@ namespace AdvancedVesselInfo
             return "";
         }
 
-        // Logic for handling the drag-to-resize behavior of the main UI and library panels.
         private void HandleResize()
         {
             Vector2 mousePos = Event.current.mousePosition;
@@ -1312,7 +1296,6 @@ namespace AdvancedVesselInfo
             }
         }
 
-        // Properly cleans up the ToolbarController button upon destruction.
         void OnDestroy()
         {
             if (AdvancedVesselInfoManager.Instance != null)
