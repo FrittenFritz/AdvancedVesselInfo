@@ -756,6 +756,11 @@ namespace AdvancedVesselInfo
 
             windowRect = ClickThruBlocker.GUILayoutWindow(8842, windowRect, DrawWindowContent, "Advanced Vessel Info");
 
+            // Keep the entire window on screen
+            windowRect.x = Mathf.Clamp(windowRect.x, 0, Screen.width - windowRect.width);            
+            windowRect.y = Mathf.Clamp(windowRect.y, 0,  Screen.height - windowRect.height);
+
+            // Save the position
             if (windowRect.x != oldMainPos.x || windowRect.y != oldMainPos.y)
             {
                 settingsRect.x += (windowRect.x - oldMainPos.x);
