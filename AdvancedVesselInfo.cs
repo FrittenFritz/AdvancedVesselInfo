@@ -32,6 +32,7 @@ namespace AdvancedVesselInfo
         public bool logFontBold = false;
         public int payFontSize = 11;
         public bool payFontBold = false;
+        public int dotFontSize = 10;
 
         public float savedDescHeight = 80f;
         public float savedLogHeight = 120f;
@@ -113,6 +114,7 @@ namespace AdvancedVesselInfo
                     if (node.HasValue("logFontBold") && bool.TryParse(node.GetValue("logFontBold"), out b)) logFontBold = b;
                     if (node.HasValue("payFontSize") && int.TryParse(node.GetValue("payFontSize"), out i)) payFontSize = i;
                     if (node.HasValue("payFontBold") && bool.TryParse(node.GetValue("payFontBold"), out b)) payFontBold = b;
+                    if (node.HasValue("dotFontSize") && int.TryParse(node.GetValue("dotFontSize"), out i)) dotFontSize = i;
 
                     if (node.HasValue("descHeight") && float.TryParse(node.GetValue("descHeight"), NumberStyles.Any, CultureInfo.InvariantCulture, out f)) savedDescHeight = f;
                     if (node.HasValue("logHeight") && float.TryParse(node.GetValue("logHeight"), NumberStyles.Any, CultureInfo.InvariantCulture, out f)) savedLogHeight = f;
@@ -192,6 +194,7 @@ namespace AdvancedVesselInfo
             node.AddValue("logFontBold", logFontBold.ToString());
             node.AddValue("payFontSize", payFontSize.ToString());
             node.AddValue("payFontBold", payFontBold.ToString());
+            node.AddValue("dotFontSize", dotFontSize.ToString());
 
             node.AddValue("descHeight", savedDescHeight.ToString(CultureInfo.InvariantCulture));
             node.AddValue("logHeight", savedLogHeight.ToString(CultureInfo.InvariantCulture));
@@ -756,9 +759,12 @@ namespace AdvancedVesselInfo
 
             windowRect = ClickThruBlocker.GUILayoutWindow(8842, windowRect, DrawWindowContent, "Advanced Vessel Info");
 
-            // Keep the entire window on screen
-            windowRect.x = Mathf.Clamp(windowRect.x, 0, Screen.width - windowRect.width);            
-            windowRect.y = Mathf.Clamp(windowRect.y, 0,  Screen.height - windowRect.height);
+            // Keep the entire window on screen (avoiding Layout phase to prevent infinite size bugs)
+            if (Event.current.type != EventType.Layout)
+            {
+                windowRect.x = Mathf.Clamp(windowRect.x, 0, Mathf.Max(0, Screen.width - windowRect.width));
+                windowRect.y = Mathf.Clamp(windowRect.y, 0, Mathf.Max(0, Screen.height - windowRect.height));
+            }
 
             // Save the position
             if (windowRect.x != oldMainPos.x || windowRect.y != oldMainPos.y)
@@ -1110,6 +1116,15 @@ namespace AdvancedVesselInfo
             GUILayout.FlexibleSpace();
             mgr.payFontBold = GUILayout.Toggle(mgr.payFontBold, "Bold Text");
             GUILayout.EndHorizontal();
+            GUILayout.Space(10);
+
+            GUILayout.Label("<b>Craft List Dot Appearance</b>", BoldStyle(12));
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("-", GUILayout.Width(35))) mgr.dotFontSize = Mathf.Max(6, mgr.dotFontSize - 1);
+            GUILayout.Label("Size: " + mgr.dotFontSize, GUILayout.Width(65));
+            if (GUILayout.Button("+", GUILayout.Width(35))) mgr.dotFontSize = Mathf.Min(24, mgr.dotFontSize + 1);
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
             GUILayout.EndVertical();
 
             GUILayout.FlexibleSpace();
@@ -1120,6 +1135,7 @@ namespace AdvancedVesselInfo
         private void DrawCraftList(int windowID)
         {
             InitializeStyles();
+            if (dotStyle != null) dotStyle.fontSize = AdvancedVesselInfoManager.Instance.dotFontSize;
             GUILayout.BeginVertical();
             GUILayout.BeginHorizontal();
             if (GUILayout.Toggle(!sortByFamily, "Folders", GUI.skin.button)) sortByFamily = false;
@@ -1259,7 +1275,7 @@ namespace AdvancedVesselInfo
 
             GUILayout.EndScrollView();
             GUILayout.Space(5);
-            GUILayout.Label("<color=silver><size=10>Advanced Vessel Info v1.7.4\nStatus: Systems Operational</size></color>", new GUIStyle(LogStyle()) { alignment = TextAnchor.MiddleCenter });
+            GUILayout.Label("<color=silver><size=10>Advanced Vessel Info v1.7.6\nStatus: Systems Operational</size></color>", new GUIStyle(LogStyle()) { alignment = TextAnchor.MiddleCenter });
             GUILayout.Space(5);
             GUILayout.EndVertical();
         }
