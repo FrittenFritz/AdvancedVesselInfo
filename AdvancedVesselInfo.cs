@@ -499,6 +499,12 @@ namespace AdvancedVesselInfo
         private GUIStyle dotStyle;
         private bool stylesInitialized = false;
 
+        private Texture2D texStatusSuccess;
+        private Texture2D texStatusPartial;
+        private Texture2D texStatusFail;
+        private Texture2D texStatusOngoing;
+        private Texture2D texWarnBox;
+
         private Dictionary<string, bool> craftHasLogs = new Dictionary<string, bool>();
         private Dictionary<string, bool> craftHasMilestones = new Dictionary<string, bool>();
 
@@ -542,6 +548,12 @@ namespace AdvancedVesselInfo
             selectedCraftStyle.normal.background = MakeTex(2, 2, new Color(1f, 1f, 1f, 0.15f));
 
             dotStyle = new GUIStyle(GUI.skin.label) { richText = true, alignment = TextAnchor.MiddleCenter, fontSize = 10 };
+
+            texStatusSuccess = MakeTex(2, 2, new Color(0.73f, 0.85f, 0.33f));
+            texStatusPartial = MakeTex(2, 2, Color.yellow);
+            texStatusFail = MakeTex(2, 2, Color.red);
+            texStatusOngoing = MakeTex(2, 2, new Color(1f, 0.5f, 0f));
+            texWarnBox = MakeTex(2, 2, new Color(1f, 0.5f, 0f, 0.1f));
 
             stylesInitialized = true;
         }
@@ -755,6 +767,8 @@ namespace AdvancedVesselInfo
         {
             if (!showGui) return;
 
+            InitializeStyles();
+
             Vector2 oldMainPos = new Vector2(windowRect.x, windowRect.y);
 
             windowRect = ClickThruBlocker.GUILayoutWindow(8842, windowRect, DrawWindowContent, "Advanced Vessel Info");
@@ -964,11 +978,11 @@ namespace AdvancedVesselInfo
                     GUILayout.BeginHorizontal();
                     if (editMode)
                     {
-                        if (StatusButton("S", 0, launchHistory[i].status, new Color(0.73f, 0.85f, 0.33f))) launchHistory[i].status = 0;
-                        if (StatusButton("P", 1, launchHistory[i].status, Color.yellow)) launchHistory[i].status = 1;
-                        if (StatusButton("F", 2, launchHistory[i].status, Color.red)) launchHistory[i].status = 2;
+                        if (StatusButton("S", 0, launchHistory[i].status)) launchHistory[i].status = 0;
+                        if (StatusButton("P", 1, launchHistory[i].status)) launchHistory[i].status = 1;
+                        if (StatusButton("F", 2, launchHistory[i].status)) launchHistory[i].status = 2;
                         GUILayout.Label("<color=grey>|</color>", new GUIStyle(GUI.skin.label) { richText = true, padding = new RectOffset(2, 2, 0, 0) }, GUILayout.Width(10));
-                        if (StatusButton("O", 3, launchHistory[i].status, new Color(1f, 0.5f, 0f))) launchHistory[i].status = 3;
+                        if (StatusButton("O", 3, launchHistory[i].status)) launchHistory[i].status = 3;
                         launchHistory[i].purpose = GUILayout.TextField(launchHistory[i].purpose);
                         if (GUILayout.Button("X", GUILayout.Width(22))) { launchHistory.RemoveAt(i); break; }
                     }
@@ -1263,7 +1277,7 @@ namespace AdvancedVesselInfo
             GUILayout.Space(15);
 
             GUIStyle warnBoxStyle = new GUIStyle(GUI.skin.box);
-            warnBoxStyle.normal.background = MakeTex(2, 2, new Color(1f, 0.5f, 0f, 0.1f));
+            warnBoxStyle.normal.background = texWarnBox;
             warnBoxStyle.padding = new RectOffset(10, 10, 8, 8);
             warnBoxStyle.margin = new RectOffset(10, 10, 0, 0);
 
@@ -1275,7 +1289,7 @@ namespace AdvancedVesselInfo
 
             GUILayout.EndScrollView();
             GUILayout.Space(5);
-            GUILayout.Label("<color=silver><size=10>Advanced Vessel Info v1.7.6\nStatus: Systems Operational</size></color>", new GUIStyle(LogStyle()) { alignment = TextAnchor.MiddleCenter });
+            GUILayout.Label("<color=silver><size=10>Advanced Vessel Info v1.7.7\nStatus: Systems Operational</size></color>", new GUIStyle(LogStyle()) { alignment = TextAnchor.MiddleCenter });
             GUILayout.Space(5);
             GUILayout.EndVertical();
         }
@@ -1426,16 +1440,21 @@ namespace AdvancedVesselInfo
 
         private GUIStyle BoldStyle(int size) => new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold, fontSize = size, richText = true };
 
-        private bool StatusButton(string label, int buttonStatus, int currentStatus, Color activeColor)
+        private bool StatusButton(string label, int buttonStatus, int currentStatus)
         {
             GUIStyle style = new GUIStyle(GUI.skin.button);
             style.fontSize = 10;
             style.richText = true;
             if (currentStatus == buttonStatus)
             {
-                style.normal.background = MakeTex(2, 2, activeColor);
-                style.hover.background = MakeTex(2, 2, activeColor);
-                style.active.background = MakeTex(2, 2, activeColor);
+                Texture2D tex = texStatusOngoing;
+                if (buttonStatus == 0) tex = texStatusSuccess;
+                else if (buttonStatus == 1) tex = texStatusPartial;
+                else if (buttonStatus == 2) tex = texStatusFail;
+
+                style.normal.background = tex;
+                style.hover.background = tex;
+                style.active.background = tex;
                 style.normal.textColor = Color.black;
                 style.hover.textColor = Color.black;
             }
