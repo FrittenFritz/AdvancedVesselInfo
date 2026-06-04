@@ -2,7 +2,7 @@
 
 No more switching to external spreadsheets or trying to remember what a specific craft was designed for three months ago!
 
-[Version 1.7.6]
+[Version 1.7.7]
 
 Features
 
